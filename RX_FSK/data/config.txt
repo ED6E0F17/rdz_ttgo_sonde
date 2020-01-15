@@ -17,7 +17,7 @@ led_pout=9
 # No specification in config file: try autodetection (gpio4 pin level at startup)
 #
 # disptype: 0=OLED, 1=ILI9225
-#disptype=0
+disptype=0
 #oled_sda=21
 #oled_scl=22
 #oled_rst=16
@@ -33,10 +33,11 @@ gps_txd=-1
 #-------------------------------#
 # General config settings
 #-------------------------------#
-maxsonde=20
+maxsonde=10
 debug=0
 # wifi mode: 1=client in background; 2=AP in background; 3=client on startup, ap if failure
-wifi=3
+# web server is unstable on Heltec v2 - disable prior to removal
+wifi=0
 # TCP/IP KISS TNC in port 14590 for APRSdroid (0=disabled, 1=enabled)
 kisstnc.active = 1
 
@@ -51,7 +52,7 @@ display=0,1,2,3,4
 startfreq=400
 channelbw=10
 spectrum=10
-noisefloor=-125
+noisefloor=-120
 marker=1
 #-------------------------------#
 # APRS settings
@@ -76,7 +77,7 @@ dfm.rxbw=10400
 #-------------------------------#
 # local use only, do not feed to public services
 # data not sanitized / quality checked, outliers not filtered out
-axudp.active=1
+axudp.active=0
 axudp.host=192.168.42.20
 axudp.port=9002
 axudp.symbol=/O
