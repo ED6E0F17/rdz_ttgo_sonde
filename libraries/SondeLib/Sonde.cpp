@@ -493,7 +493,7 @@ rxloop:
 	// currently used only by RS92
 	switch(sondeList[rxtask.receiveSonde].type) {
 	case STYPE_RS41:
-		rs41.waitRXcomplete();
+		rs41.waitRXcomplete(); // does nothing
 		break;
 	case STYPE_RS92:
 		rs92.waitRXcomplete();
@@ -627,9 +627,9 @@ void Sonde::updateDisplayIP() {
 
 void Sonde::updateDisplay()
 {
-	int t = millis();
+	//int t = millis();
 	disp.updateDisplay();
-	Serial.printf("updateDisplay took %d ms\n", (int)(millis()-t));
+	// Serial.printf("updateDisplay took %d ms\n", (int)(millis()-t));
 }
 
 void Sonde::clearDisplay() {
