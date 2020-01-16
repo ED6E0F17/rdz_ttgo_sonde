@@ -1541,7 +1541,8 @@ void enterMode(int mode) {
   mainState = (MainState)mode;
   if (mainState == ST_SPECTRUM) {
     Serial.println("Entering ST_SPECTRUM mode");
-    sonde.clearDisplay();
+    // -- Display will be cleared when it is drawn
+    // sonde.clearDisplay();
     disp.rdis->setFont(FONT_SMALL);
     specTimer = millis();
     //scanner.init();
@@ -1552,8 +1553,10 @@ void enterMode(int mode) {
     // trigger activation of background task
     // currentSonde should be set before enterMode()
     rxtask.activate = ACT_SONDE(sonde.currentSonde);
-    sonde.clearDisplay();
-    sonde.updateDisplay();
+    // -- Dont update display while scanning
+    // sonde.clearDisplay();
+    // sonde.updateDisplay();
+    // -- Will be updated when tracking
   }
 }
 
@@ -1593,8 +1596,10 @@ void loopDecoder() {
         enterMode(ST_WIFISCAN);
         return;
       }
-      // no... we are already in DECODER mode, so no need to do anything!?
-      //else if (action == ACT_NEXTSONDE) enterMode(ST_DECODER); // update rx background task
+      else if (action == ACT_NEXTSONDE) {
+        enterMode(ST_SPECTRUM); // update spectrum between scans
+        return;
+      }
     }
     Serial.printf("current main is %d, current rxtask is %d\n", sonde.currentSonde, rxtask.currentSonde);
   }
@@ -1651,7 +1656,6 @@ void loopDecoder() {
 }
 
 void setCurrentDisplay(int value) {
-  Serial.printf("setCurrentDisplay: setting index %d, entry %d\b", value, sonde.config.display[value]);
   currentDisplay = sonde.config.display[value];
 }
 
@@ -1659,6 +1663,7 @@ void loopSpectrum() {
   int marker = 0;
   char buf[10];
 
+#if 0
   switch (getKeyPress()) {
     case KP_SHORT: /* move selection of peak, TODO */
       sonde.nextConfig(); // TODO: Should be set specific frequency
@@ -1675,9 +1680,12 @@ void loopSpectrum() {
       return;
     default: break;
   }
+#endif
 
   scanner.scan();
+  sonde.clearDisplay();
   scanner.plotResult();
+#if 0
   if (sonde.config.marker != 0) {
     itoa((sonde.config.startfreq), buf, 10);
     disp.rdis->drawString(0, 1, buf);
@@ -1685,6 +1693,7 @@ void loopSpectrum() {
     itoa((sonde.config.startfreq + 6), buf, 10);
     disp.rdis->drawString(13, 1, buf);
   }
+
   if (sonde.config.spectrum > 0) {
     int remaining = sonde.config.spectrum - (millis() - specTimer) / 1000;
     itoa(remaining, buf, 10);
@@ -1699,6 +1708,9 @@ void loopSpectrum() {
       enterMode(ST_DECODER);
     }
   }
+#else
+    enterMode(ST_DECODER);
+#endif
 }
 
 void startSpectrumDisplay() {
@@ -2264,8 +2276,8 @@ void execOTA() {
 
 
 void loop() {
-  Serial.printf("\nRunning main loop in state %d. free heap: %d;\n", mainState, ESP.getFreeHeap());
-  Serial.printf("currentDisp:%d lastDisp:%d\n", currentDisplay, lastDisplay);
+  // Serial.printf("\nRunning main loop in state %d. free heap: %d;\n", mainState, ESP.getFreeHeap());
+  // Serial.printf("currentDisp:%d lastDisp:%d\n", currentDisplay, lastDisplay);
   switch (mainState) {
     case ST_DECODER: loopDecoder(); break;
     case ST_SPECTRUM: loopSpectrum(); break;
@@ -2289,5 +2301,5 @@ void loop() {
     sonde.updateDisplay();
     lastDisplay = currentDisplay;
   }
-  Serial.printf("Unused stack: %d\n", uxTaskGetStackHighWaterMark(0));
+  // Serial.printf("Unused stack: %d\n", uxTaskGetStackHighWaterMark(0));
 }
