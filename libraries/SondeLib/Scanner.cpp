@@ -11,7 +11,7 @@
 //#define STARTF 401000000
 #define NCHAN ((int)(6000/CHANBW))
 
-double STARTF = (sonde.config.startfreq * 1000000);
+double STARTF = (400 * 1000000);
 //int CHANBW = (sonde.config.channelbw);
 //int NCHAN = ((int)(6000/CHANBW));
 //int PIXSAMPL = (50/CHANBW);
@@ -72,7 +72,7 @@ void Scanner::scan()
 
 	unsigned long start = millis();
 	uint32_t lastfrf=-1;
-	for(int iter=0; iter<2; iter++) {   // two interations, to catch all RS41 transmissions
+	{   // one interation: may miss RS41 transmissions
 	    for(int i=0; i<NCHAN; i++) {
 		float freq = STARTF + 1000.0*i*CHANBW;
 		uint32_t frf = freq * 1.0 * (1<<19) / SX127X_CRYSTAL_FREQ;
@@ -85,26 +85,27 @@ void Scanner::scan()
         	sx1278.writeRegister(REG_FRF_LSB, (frf&0x0000ff));
 		lastfrf = frf;
 		// Wait TS_HOP (20us) + TS_RSSI ( 2^(SMOOTH+1) / 4 / CHANBW us)
-		int wait = 20 + 1000*(1<<(SMOOTH+1))/4/CHANBW;
+		int wait = 20 + 1000*(1<<(SMOOTH+1))/4/CHANBW; // 420us * 600 => 250ms
 		delayMicroseconds(wait+5);
 		int rssi = -(int)sx1278.readRegister(REG_RSSI_VALUE_FSK);
-		if(iter==0) { scanresult[i] = rssi; } else {
-			if(rssi>scanresult[i]) scanresult[i]=rssi;
-		}
+		scanresult[i] = rssi;
 	    }
 	}
 	unsigned long duration = millis()-start;
 	Serial.print("Scan time: ");
 	Serial.println(duration);
-	for(int i=0; i<NCHAN; i+=PIXSAMPL) {
-		scandisp[i/PIXSAMPL]=scanresult[i];
-		for(int j=1; j<PIXSAMPL; j++) { scandisp[i/PIXSAMPL]+=scanresult[i+j]; }
-		//for(int j=1; j<PIXSAMPL; j++) { if(scanresult[i+j]>scandisp[i/PIXSAMPL]) scandisp[i/PIXSAMPL] = scanresult[i+j]; }
-		Serial.print(scanresult[i]); Serial.print(", ");
-	}
-	Serial.println("\n");
-	for(int i=0; i<NCHAN/PIXSAMPL; i++) { 
-		scandisp[i]/=PIXSAMPL;
+	for(int i=0; i<(NCHAN/PIXSAMPL); i++) {
+		scandisp[i]=scanresult[i*PIXSAMPL];
+		// for(int j=1; j<PIXSAMPL; j++) { scandisp[i]+=scanresult[i*PIXLSAMPL+j]; }
+		for(int j=1; j<PIXSAMPL; j++) {
+			if (scanresult[i*PIXSAMPL+j] > scandisp[i])
+				scandisp[i] = scanresult[i*PIXSAMPL+j];
+		}
+		// Serial.print(scanresult[i]); Serial.print(", ");
+	//}
+	//Serial.println("\n");
+	//for(int i=0; i<NCHAN/PIXSAMPL; i++) {
+		// scandisp[i]/=PIXSAMPL;
                 Serial.print(scandisp[i]); Serial.print(", ");
 	}
 	Serial.println("\n");
