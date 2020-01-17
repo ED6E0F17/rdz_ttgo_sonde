@@ -1557,6 +1557,8 @@ void enterMode(int mode) {
     // sonde.clearDisplay();
     // sonde.updateDisplay();
     // -- Will be updated when tracking
+    disp.rdis->setFont(FONT_SMALL);
+    disp.rdis->drawString(0, 0, sonde.si()->launchsite);
   }
 }
 
