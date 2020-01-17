@@ -24,7 +24,9 @@ int scandisp[NCHAN/PIXSAMPL];
 #define TICK2 (TICK1/4)
 //#define PLOT_MIN -250
 #define PLOT_MIN (sonde.config.noisefloor*2)
-#define PLOT_SCALE(x) (x<PLOT_MIN?0:(x-PLOT_MIN)/2)
+//#define PLOT_SCALE(x) (x<PLOT_MIN?0:(x-PLOT_MIN)/2)
+// no need to clip scale, this is handled when plotting
+#define PLOT_SCALE(x) ((x-PLOT_MIN)/2)
 
 const byte tilepatterns[9]={0,0x80,0xC0,0xE0,0xF0,0xF8,0xFC,0xFE,0xFF};
 void Scanner::fillTiles(uint8_t *row, int value) {
@@ -47,14 +49,14 @@ void Scanner::plotResult()
 	for(int i=0; i<PLOT_N; i+=8) {
 		for(int j=0; j<8; j++) {
 			fillTiles(row+j, PLOT_SCALE(scandisp[i+j]));
-		        if( ((i+j)%TICK1)==0) { row[j] |= 0x07; }
-		        if( ((i+j)%TICK2)==0) { row[j] |= 0x01; }
+		        // if( ((i+j)%TICK1)==0) { row[j] |= 0x07; }
+		        // if( ((i+j)%TICK2)==0) { row[j] |= 0x01; }
 		}
 		for(int y=0; y<8; y++) {
-			if(sonde.config.marker && y==1) {
+			// if(sonde.config.marker && y==1) {
 				// don't overwrite MHz marker text
-				if(i<3*8 || (i>=7*8&&i<10*8) || i>=13*8) continue;
-			}
+			//	if(i<3*8 || (i>=7*8&&i<10*8) || i>=13*8) continue;
+			// }
 			disp.rdis->drawTile(i/8, y, 1, row+8*y);
 		}
 	}
