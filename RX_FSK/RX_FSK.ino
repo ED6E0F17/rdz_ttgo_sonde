@@ -127,7 +127,7 @@ const String sondeTypeSelect(int activeType) {
 //trying to work around
 //"assertion "heap != NULL && "free() target pointer is outside heap areas"" failed:"
 // which happens if request->send is called in createQRGForm!?!??
-char message[10240 * 4]; //needs to be large enough for all forms (not checked in code)
+char message[10240 * 1]; //needs to be large enough for all forms (not checked in code)
 // QRG form is currently about 24kb with 100 entries
 
 ///////////////////////// Functions for Reading / Writing QRG list from/to qrg.txt
@@ -279,6 +279,7 @@ void setupWifiList() {
     networks[i].pw = readLine(file); // file.readStringUntil('\n');
     i++;
   }
+  file.close();
   nNetworks = i;
   Serial.print(i); Serial.println(" networks in networks.txt\n");
   for (int j = 0; j < i; j++) {
@@ -396,8 +397,8 @@ void setupConfigData() {
     String line = readLine(file);  //file.readStringUntil('\n');
     sonde.setConfig(line.c_str());
   }
+  file.close();
 }
-
 
 struct st_configitems {
   const char *name;
@@ -678,6 +679,7 @@ const char *createEditForm(String filename) {
     strcat(ptr, line.c_str()); strcat(ptr, "\n");
   }
   strcat(ptr, "</textarea><input type=\"submit\" value=\"Save\"></input></form></body></html>");
+  file.close();
   return message;
 }
 
@@ -804,16 +806,16 @@ void SetupAsyncServer() {
   server.reset();
   // Route for root / web page
   server.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/index.html", String(), false, processor);
+    request->send(200, "text/html", createStatusForm());
   });
 
   server.on("/index.html", HTTP_GET, [](AsyncWebServerRequest * request) {
     request->send(SPIFFS, "/index.html", String(), false, processor);
   });
 
-  server.on("/test.html", HTTP_GET, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/test.html", String(), false, processor);
-  });
+//  server.on("/test.html", HTTP_GET, [](AsyncWebServerRequest * request) {
+//    request->send(SPIFFS, "/test.html", String(), false, processor);
+//  });
 
   server.on("/qrg.html", HTTP_GET,  [](AsyncWebServerRequest * request) {
     request->send(200, "text/html", createQRGForm());
@@ -865,28 +867,25 @@ void SetupAsyncServer() {
     handleEditPost(request);
     request->send(200, "text/html", createEditForm(request->getParam(0)->value()));
   });
-
   // Route to load style.css file
   server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest * request) {
     request->send(SPIFFS, "/style.css", "text/css");
   });
 
   // Route to set GPIO to HIGH
-  server.on("/test.php", HTTP_POST, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/index.html", String(), false, processor);
-  });
+//  server.on("/test.php", HTTP_POST, [](AsyncWebServerRequest * request) {
+//    request->send(SPIFFS, "/index.html", String(), false, processor);
+//  });
 
   server.onNotFound([](AsyncWebServerRequest * request) {
     if (request->method() == HTTP_OPTIONS) {
       request->send(200);
     } else {
       String url = request->url();
-      if (url.endsWith(".gpx"))
-        request->send(200, "application/gpx+xml", sendGPX(request));
-      else {
-        request->send(SPIFFS, url, "text/html");
+      {
+        //request->send(SPIFFS, url, "text/html");
         Serial.printf("URL is %s\n", url.c_str());
-        //request->send(404);
+        request->send(404);
       }
     }
   });
@@ -2012,6 +2011,7 @@ void loopWifiScan() {
   }
   if (sonde.config.wifi == 2) { // AP mode, setup in background
     startAP();
+    enableNetwork(true);
     initialMode();
     return;
   }
