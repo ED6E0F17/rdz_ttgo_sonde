@@ -1,6 +1,8 @@
 RDZ_TTGO_SONDE
 ==============
-
+ ( This branch modified for Bluetooth Serial output to HabExplora App. )
+ (    Wifi removed by necessity: set config before updating firmware.  )
+==============
 This a simple, experimental, not (well) tested, and incomplete decoder for
 radiosonde RS41 and DFM06/09 on a TTGO LoRa ESP32 with OLED display board.
 
@@ -19,7 +21,7 @@ issue some commands. The software distinguishes between several inputs:
 - MID	Medium-length button press (2-4 seconds)
 - LONG	Long button press (>5 seconds)
 
-## Wireless configuration
+## Wifi disabled
 
 On startup, as well as after a LONG button press, the WiFI configuration will
 be started.  The board will scan available WiFi networks, if the scan results

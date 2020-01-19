@@ -366,7 +366,7 @@ static void posrs41(const byte b[], uint32_t b_len, uint32_t p)
    Serial.print("m/s ");
    uint8_t sats = getcard16(b, b_len, p+18UL)&255UL;
    Serial.print(sats);
-   Serial.print("Sats");
+   Serial.println("Sats");
    sonde.si()->sats = sats;
    sonde.si()->alt = heig;
    if( 0==(int)(lat*10000) && 0==(int)(long0*10000) ) {
@@ -379,7 +379,17 @@ static void posrs41(const byte b[], uint32_t b_len, uint32_t p)
       sonde.si()->validPos = 0x7f;
 } /* end posrs41() */
 
-
+// Encode time of day
+static int32_t bcdtime(uint32_t tow)
+{
+   uint32_t seconds = tow % 60;
+   uint32_t minutes = tow / 60;
+   uint32_t hour = minutes / 60;
+   minutes = minutes % 60;
+   hour = hour % 24;
+   sonde.si()->hhmmss = (hour << 16) + (minutes << 8) + seconds;
+   Serial.printf("[%02d:%02d:%02d]", hour, minutes, seconds);
+}
 
 // returns: 0: ok, -1: rs or crc error
 int RS41::decode41(byte *data, int maxlen)
@@ -451,9 +461,9 @@ int RS41::decode41(byte *data, int maxlen)
 			}
 			// and this seems fine as well...
 			if(calnr==0x32) {
+				// countdown is <500m, updated every 50s
 				uint16_t cntdown = data[p+24] + (data[p+25]<<8);
-				uint16_t min = cntdown - (cntdown/3600)*3600;
-				Serial.printf("Countdown value: %d\n [%2d:%02d:%02d]", cntdown, cntdown/3600, min/60, min-(min/60)*60);
+				Serial.printf("Kill Time: %dm\n", cntdown/60);
 				sonde.si()->countKT = cntdown;
 				sonde.si()->crefKT = fnr;
 			}
@@ -471,6 +481,7 @@ int RS41::decode41(byte *data, int maxlen)
 			// subtracting 86400 yields 315878400UL
 			sonde.si()->time = (gpstime/1000) + 86382 + gpsweek*604800 + 315878400UL;
 			sonde.si()->validTime = true;
+			bcdtime(gpstime/1000); // GPS Seconds to 0x00HHMMSS
 			}
 			break;
 		case '{': // pos
@@ -480,7 +491,7 @@ int RS41::decode41(byte *data, int maxlen)
 			break;
 		}}
 		p += len;
-		Serial.println();
+		// Serial.println();
 	}
 	return crcok ? 0 : -1;
 }

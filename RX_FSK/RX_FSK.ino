@@ -1,8 +1,6 @@
 #include <axp20x.h>
 
-#include <WiFi.h>
-#include <WiFiUdp.h>
-#include <ESPAsyncWebServer.h>
+#include <BluetoothSerial.h>
 
 #include <SPIFFS.h>
 //#include <U8x8lib.h>
@@ -25,31 +23,14 @@
 int e;
 
 enum MainState { ST_DECODER, ST_SPECTRUM, ST_WIFISCAN, ST_UPDATE, ST_TOUCHCALIB };
-static MainState mainState = ST_WIFISCAN; // ST_WIFISCAN;
-
-AsyncWebServer server(80);
-AsyncWebSocket ws("/ws");
+static MainState mainState = ST_SPECTRUM;
 
 AXP20X_Class axp;
 #define PMU_IRQ             35
 
-
-String updateHost = "rdzsonde.mooo.com";
-int updatePort = 80;
-String updateBinM = "/master/update.ino.bin";
-String updateBinD = "/devel/update.ino.bin";
-String *updateBin = &updateBinM;
-
 #define LOCALUDPPORT 9002
-
 boolean connected = false;
-WiFiUDP udp;
-WiFiClient client;
-
-// KISS over TCP für communicating with APRSdroid
-WiFiServer tncserver(14580);
-WiFiClient tncclient;
-
+BluetoothSerial SerialBT; 
 boolean forceReloadScreenConfig = false;
 
 enum KeyPress { KP_NONE = 0, KP_SHORT, KP_DOUBLE, KP_MID, KP_LONG };
@@ -123,13 +104,6 @@ const String sondeTypeSelect(int activeType) {
   return sts;
 }
 
-
-//trying to work around
-//"assertion "heap != NULL && "free() target pointer is outside heap areas"" failed:"
-// which happens if request->send is called in createQRGForm!?!??
-char message[10240 * 4]; //needs to be large enough for all forms (not checked in code)
-// QRG form is currently about 24kb with 100 entries
-
 ///////////////////////// Functions for Reading / Writing QRG list from/to qrg.txt
 
 void setupChannelList() {
@@ -182,209 +156,7 @@ void setupChannelList() {
   file.close();
 }
 
-const char *createQRGForm() {
-  char *ptr = message;
-  strcpy(ptr, "<html><head><link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"></head><body><form action=\"qrg.html\" method=\"post\"><table><tr><th>ID</th><th>Active</th><th>Freq</th><th>Launchsite</th><th>Mode</th></tr>");
-  for (int i = 0; i < sonde.config.maxsonde; i++) {
-    String s = sondeTypeSelect(i >= sonde.nSonde ? 2 : sonde.sondeList[i].type);
-    String site = sonde.sondeList[i].launchsite;
-    sprintf(ptr + strlen(ptr), "<tr><td>%d</td><td><input name=\"A%d\" type=\"checkbox\" %s/></td>"
-            "<td><input name=\"F%d\" type=\"text\" value=\"%3.3f\"></td>"
-            "<td><input name=\"S%d\" type=\"text\" value=\"%s\"></td>"
-            "<td><select name=\"T%d\">%s</select></td>",
-            i + 1,
-            i + 1, (i < sonde.nSonde && sonde.sondeList[i].active) ? "checked" : "",
-            i + 1, i >= sonde.nSonde ? 400.000 : sonde.sondeList[i].freq,
-            i + 1, i >= sonde.nSonde ? "                " : sonde.sondeList[i].launchsite,
-            i + 1, s.c_str());
-  }
-  strcat(ptr, "</table><input type=\"submit\" value=\"Update\"/></form></body></html>");
-  return message;
-}
-
-const char *handleQRGPost(AsyncWebServerRequest *request) {
-  char label[10];
-  // parameters: a_i, f_1, t_i  (active/frequency/type)
-#if 1
-  File file = SPIFFS.open("/qrg.txt", "w");
-  if (!file) {
-    Serial.println("Error while opening '/qrg.txt' for writing");
-    return "Error while opening '/qrg.txt' for writing";
-  }
-#endif
-  Serial.println("Handling post request");
-#if 0
-  int params = request->params();
-  for (int i = 0; i < params; i++) {
-    String pname = request->getParam(i)->name();
-    Serial.println(pname.c_str());
-  }
-#endif
-  for (int i = 1; i <= sonde.config.maxsonde; i++) {
-    snprintf(label, 10, "A%d", i);
-    AsyncWebParameter *active = request->getParam(label, true);
-    snprintf(label, 10, "F%d", i);
-    AsyncWebParameter *freq = request->getParam(label, true);
-    snprintf(label, 10, "S%d", i);
-    AsyncWebParameter *launchsite = request->getParam(label, true);
-    if (!freq) continue;
-    snprintf(label, 10, "T%d", i);
-    AsyncWebParameter *type = request->getParam(label, true);
-    if (!type) continue;
-    String fstring = freq->value();
-    String tstring = type->value();
-    String sstring = launchsite->value();
-    const char *fstr = fstring.c_str();
-    const char *tstr = tstring.c_str();
-    const char *sstr = sstring.c_str();
-    Serial.printf("Processing a=%s, f=%s, t=%s, site=%s\n", active ? "YES" : "NO", fstr, tstr, sstr);
-    char typech = (tstr[2] == '4' ? '4' : tstr[2] == '9' ? 'R' : tstr[0] == 'M' ? 'M' : tstr[3]); // a bit ugly
-    file.printf("%3.3f %c %c %s\n", atof(fstr), typech, active ? '+' : '-', sstr);
-  }
-  file.close();
-
-  Serial.println("Channel setup finished");
-  Serial.println();
-  delay(500);
-  setupChannelList();
-  return "";
-}
-
-
-/////////////////// Functions for reading/writing Wifi networks from networks.txt
-
-#define MAX_WIFI 10
-int nNetworks;
-struct {
-  String id;
-  String pw;
-} networks[MAX_WIFI];
-
-// FIXME: For now, we don't uspport wifi networks that contain newline or null characters
-// ... would require a more sophisicated file format (currently one line SSID; one line Password
-void setupWifiList() {
-  File file = SPIFFS.open("/networks.txt", "r");
-  if (!file) {
-    Serial.println("There was an error opening the file '/networks.txt' for reading");
-    networks[0].id = "RDZsonde";
-    networks[0].pw = "RDZsonde";
-    return;
-  }
-  int i = 0;
-
-  while (file.available()) {
-    String line = readLine(file);  //file.readStringUntil('\n');
-    if (!file.available()) break;
-    networks[i].id = line;
-    networks[i].pw = readLine(file); // file.readStringUntil('\n');
-    i++;
-  }
-  nNetworks = i;
-  Serial.print(i); Serial.println(" networks in networks.txt\n");
-  for (int j = 0; j < i; j++) {
-    Serial.print(networks[j].id);
-    Serial.print(": ");
-    Serial.println(networks[j].pw);
-  }
-}
-
-
-const char *createWIFIForm() {
-  char *ptr = message;
-  char tmp[4];
-  strcpy(ptr, "<html><head><link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"></head><body><form action=\"wifi.html\" method=\"post\"><table><tr><th>Nr</th><th>SSID</th><th>Password</th></tr>");
-  for (int i = 0; i < MAX_WIFI; i++) {
-    sprintf(tmp, "%d", i);
-    sprintf(ptr + strlen(ptr), "<tr><td>%s</td><td><input name=\"S%d\" type=\"text\" value=\"%s\"/></td>"
-            "<td><input name=\"P%d\" type=\"text\" value=\"%s\"/></td>",
-            i == 0 ? "<b>AP</b>" : tmp,
-            i + 1, i < nNetworks ? networks[i].id.c_str() : "",
-            i + 1, i < nNetworks ? networks[i].pw.c_str() : "");
-  }
-  strcat(ptr, "</table><input type=\"submit\" value=\"Update\"></input></form></body></html>");
-  return message;
-}
-
-const char *handleWIFIPost(AsyncWebServerRequest *request) {
-  char label[10];
-  // parameters: a_i, f_1, t_i  (active/frequency/type)
-#if 1
-  File f = SPIFFS.open("/networks.txt", "w");
-  if (!f) {
-    Serial.println("Error while opening '/networks.txt' for writing");
-    return "Error while opening '/networks.txt' for writing";
-  }
-#endif
-  Serial.println("Handling post request");
-#if 0
-  int params = request->params();
-  for (int i = 0; i < params; i++) {
-    String param = request->getParam(i)->name();
-    Serial.println(param.c_str());
-  }
-#endif
-  for (int i = 1; i <= MAX_WIFI; i++) {
-    snprintf(label, 10, "S%d", i);
-    AsyncWebParameter *ssid = request->getParam(label, true);
-    if (!ssid) continue;
-    snprintf(label, 10, "P%d", i);
-    AsyncWebParameter *pw = request->getParam(label, true);
-    if (!pw) continue;
-    String sstring = ssid->value();
-    String pstring = pw->value();
-    const char *sstr = sstring.c_str();
-    const char *pstr = pstring.c_str();
-    if (strlen(sstr) == 0) continue;
-    Serial.printf("Processing S=%s, P=%s\n", sstr, pstr);
-    f.printf("%s\n%s\n", sstr, pstr);
-  }
-  f.close();
-  setupWifiList();
-  return "";
-}
-
-// Show current status
-void addSondeStatus(char *ptr, int i)
-{
-  struct tm ts;
-  SondeInfo *s = &sonde.sondeList[i];
-  strcat(ptr, "<table>");
-  sprintf(ptr + strlen(ptr), "<tr><td id=\"sfreq\">%3.3f MHz, Type: %s</td><tr><td>ID: %s", s->freq, sondeTypeStr[s->type],
-          s->validID ? s->id : "<?""?>");
-  if (s->validID && (s->type == STYPE_DFM06 || s->type == STYPE_DFM09 || s->type == STYPE_M10)) {
-    sprintf(ptr + strlen(ptr), " (ser: %s)", s->ser);
-  }
-  sprintf(ptr + strlen(ptr), "</td></tr><tr><td>QTH: %.6f,%.6f h=%.0fm</td></tr>\n", s->lat, s->lon, s->alt);
-  const time_t t = s->time;
-  ts = *gmtime(&t);
-  sprintf(ptr + strlen(ptr), "<tr><td>Frame# %d, Sats=%d, %04d-%02d-%02d %02d:%02d:%02d</td></tr>",
-          s->frame, s->sats, ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday, ts.tm_hour, ts.tm_min, ts.tm_sec + s->sec);
-  if(s->type == STYPE_RS41) {
-     sprintf(ptr + strlen(ptr), "<tr><td>Burst-KT=%d Launch-KT=%d Countdown=%d (vor %ds)</td></tr>\n",
-          s->burstKT, s->launchKT, s->countKT, ((uint16_t)s->frame-s->crefKT));
-  }
-  sprintf(ptr + strlen(ptr), "<tr><td><a target=\"_empty\" href=\"geo:%.6f,%.6f\">GEO-App</a> - ", s->lat, s->lon);
-  sprintf(ptr + strlen(ptr), "<a target=\"_empty\" href=\"https://wx.dl2mf.de/?%s\">WX.DL2MF.de</a> - ", s->id);
-  sprintf(ptr + strlen(ptr), "<a target=\"_empty\" href=\"https://www.openstreetmap.org/?mlat=%.6f&mlon=%.6f&zoom=14\">OSM</a></td></tr>", s->lat, s->lon);
-  strcat(ptr, "</table><p/>\n");
-}
-
-const char *createStatusForm() {
-  char *ptr = message;
-  strcpy(ptr, "<html><head><link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"><meta http-equiv=\"refresh\" content=\"5\"></head><body>");
-
-  for (int i = 0; i < sonde.nSonde; i++) {
-    int snum = (i + sonde.currentSonde) % sonde.nSonde;
-    if (sonde.sondeList[snum].active) {
-      addSondeStatus(ptr, snum);
-    }
-  }
-  strcat(ptr, "</body></html>");
-  return message;
-}
-
 ///////////////////// Config form
-
 
 void setupConfigData() {
   File file = SPIFFS.open("/config.txt", "r");
@@ -397,7 +169,6 @@ void setupConfigData() {
     sonde.setConfig(line.c_str());
   }
 }
-
 
 struct st_configitems {
   const char *name;
@@ -468,477 +239,6 @@ struct st_configitems config_list[] = {
 };
 const static int N_CONFIG = (sizeof(config_list) / sizeof(struct st_configitems));
 
-void addConfigStringEntry(char *ptr, int idx, const char *label, int len, char *field) {
-  sprintf(ptr + strlen(ptr), "<tr><td>%s</td><td><input name=\"CFG%d\" type=\"text\" value=\"%s\"/></td></tr>\n",
-          label, idx, field);
-}
-void addConfigNumEntry(char *ptr, int idx, const char *label, int *value) {
-  sprintf(ptr + strlen(ptr), "<tr><td>%s</td><td><input name=\"CFG%d\" type=\"text\" value=\"%d\"/></td></tr>\n",
-          label, idx, *value);
-}
-void addConfigButtonEntry(char *ptr, int idx, const char *label, int *value) {
-  sprintf(ptr + strlen(ptr), "<tr><td>%s</td><td><input name=\"CFG%d\" type=\"text\" size=\"3\" value=\"%d\"/>",
-          label, idx, 127 & *value);
-  sprintf(ptr + strlen(ptr), "<input type=\"checkbox\" name=\"TO%d\"%s> Touch </td></tr>\n", idx, 128 & *value ? " checked" : "");
-}
-void addConfigTypeEntry(char *ptr, int idx, const char *label, int *value) {
-  // TODO
-}
-void addConfigOnOffEntry(char *ptr, int idx, const char *label, int *value) {
-  // TODO
-}
-void addConfigSeparatorEntry(char *ptr) {
-  strcat(ptr, "<tr><td colspan=\"2\" class=\"divider\"><hr /></td></tr>\n");
-}
-void addConfigHeading(char *ptr, const char *label) {
-  strcat(ptr, "<tr><th colspan=\"2\">");
-  strcat(ptr, label);
-  strcat(ptr, "</th></tr>\n");
-}
-void addConfigInt8List(char *ptr, int idx, const char *label, int8_t *list) {
-  sprintf(ptr + strlen(ptr), "<tr><td>%s", label);
-  for (int i = 0; i < disp.nLayouts; i++) {
-    sprintf(ptr + strlen(ptr), "<br>%d=%s", i, disp.layouts[i].label);
-  }
-  sprintf(ptr + strlen(ptr), "</td><td><input name=\"CFG%d\" type=\"text\" value=\"", idx);
-  if (*list == -1) {
-    strcat(ptr, "0");
-  }
-  else {
-    sprintf(ptr + strlen(ptr), "%d", list[0]);
-    list++;
-  }
-  while (*list != -1) {
-    sprintf(ptr + strlen(ptr), ",%d", *list);
-    list++;
-  }
-  strcat(ptr, "\"/></td></tr>\n");
-}
-
-const char *createConfigForm() {
-  char *ptr = message;
-  strcpy(ptr, "<html><head><link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"></head><body><form action=\"config.html\" method=\"post\"><table><tr><th>Option</th><th>Value</th></tr>");
-  for (int i = 0; i < N_CONFIG; i++) {
-    switch (config_list[i].type) {
-      case -5: // Heading
-        addConfigHeading(ptr, config_list[i].label);
-        break;
-      case -6: // List of int8 values
-        addConfigInt8List(ptr, i, config_list[i].label, (int8_t *)config_list[i].data);
-        break;
-      case -3: // in/offt
-        addConfigOnOffEntry(ptr, i, config_list[i].label, (int *)config_list[i].data);
-        break;
-      case -2: // DFM format
-        addConfigTypeEntry(ptr, i, config_list[i].label, (int *)config_list[i].data);
-        break;
-      case -1:
-        addConfigSeparatorEntry(ptr);
-        break;
-      case 0:
-        addConfigNumEntry(ptr, i, config_list[i].label, (int *)config_list[i].data);
-        break;
-      case -4:
-        addConfigButtonEntry(ptr, i, config_list[i].label, (int *)config_list[i].data);
-        break;
-      default:
-        addConfigStringEntry(ptr, i, config_list[i].label, config_list[i].type, (char *)config_list[i].data);
-        break;
-    }
-  }
-  strcat(ptr, "</table><input type=\"submit\" value=\"Update\"></input></form></body></html>");
-  return message;
-}
-
-
-const char *handleConfigPost(AsyncWebServerRequest *request) {
-  // parameters: a_i, f_1, t_i  (active/frequency/type)
-#if 1
-  File f = SPIFFS.open("/config.txt", "w");
-  if (!f) {
-    Serial.println("Error while opening '/config.txt' for writing");
-    return "Error while opening '/config.txt' for writing";
-  }
-#endif
-  Serial.println("Handling post request");
-#if 1
-  int params = request->params();
-  for (int i = 0; i < params; i++) {
-    String param = request->getParam(i)->name();
-    Serial.println(param.c_str());
-  }
-#endif
-  for (int i = 0; i < params; i++) {
-    String strlabel = request->getParam(i)->name();
-    const char *label = strlabel.c_str();
-    if (strncmp(label, "CFG", 3) != 0) continue;
-    int idx = atoi(label + 3);
-    Serial.printf("idx is %d\n", idx);
-    if (config_list[idx].type == -1) continue; // skip separator entries, should not happen
-    AsyncWebParameter *value = request->getParam(label, true);
-    if (!value) continue;
-    String strvalue = value->value();
-    if (config_list[idx].type == -4) {  // input button port with "touch" checkbox
-      char tmp[10];
-      snprintf(tmp, 10, "TO%d", idx);
-      AsyncWebParameter *touch = request->getParam(tmp, true);
-      if (touch) {
-        int i = atoi(strvalue.c_str()) + 128;
-        strvalue = String(i);
-      }
-    }
-    Serial.printf("Processing  %s=%s\n", config_list[idx].name, strvalue.c_str());
-    f.printf("%s=%s\n", config_list[idx].name, strvalue.c_str());
-  }
-  f.close();
-  setupConfigData();
-  return "";
-}
-
-const char *ctrlid[] = {"rx", "scan", "spec", "wifi", "rx2", "scan2", "spec2", "wifi2"};
-
-const char *ctrllabel[] = {"Receiver (short keypress)", "Scanner (double keypress)", "Spectrum (medium keypress)", "WiFi (long keypress)",
-                           "Button 2 (short keypress)", "Button 2 (double keypress)", "Button 2 (medium keypress)", "Button 2 (long keypress)"
-                          };
-
-const char *createControlForm() {
-  char *ptr = message;
-  strcpy(ptr, "<html><head><link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"></head><body><form action=\"control.html\" method=\"post\">");
-  for (int i = 0; i < 8; i++) {
-    strcat(ptr, "<input type=\"submit\" name=\"");
-    strcat(ptr, ctrlid[i]);
-    strcat(ptr, "\" value=\"");
-    strcat(ptr, ctrllabel[i]);
-    strcat(ptr, "\"></input><br>");
-  }
-  strcat(ptr, "</form></body></html>");
-  return message;
-}
-
-
-const char *handleControlPost(AsyncWebServerRequest *request) {
-  Serial.println("Handling post request");
-  int params = request->params();
-  for (int i = 0; i < params; i++) {
-    String param = request->getParam(i)->name();
-    Serial.println(param.c_str());
-    if (param.equals("rx")) {
-      Serial.println("equals rx");
-      button1.pressed = KP_SHORT;
-    }
-    else if (param.equals("scan")) {
-      Serial.println("equals scan");
-      button1.pressed = KP_DOUBLE;
-    }
-    else if (param.equals("spec")) {
-      Serial.println("equals spec");
-      button1.pressed = KP_MID;
-    }
-    else if (param.equals("wifi")) {
-      Serial.println("equals wifi");
-      button1.pressed = KP_LONG;
-    }
-    else if (param.equals("rx2")) {
-      Serial.println("equals rx2");
-      button2.pressed = KP_SHORT;
-    }
-    else if (param.equals("scan2")) {
-      Serial.println("equals scan2");
-      button2.pressed = KP_DOUBLE;
-    }
-    else if (param.equals("spec2")) {
-      Serial.println("equals spec2");
-      button2.pressed = KP_MID;
-    }
-    else if (param.equals("wifi2")) {
-      Serial.println("equals wifi2");
-      button2.pressed = KP_LONG;
-    }
-  }
-  return "";
-}
-
-// bad idea. prone to buffer overflow. use at your own risk...
-const char *createEditForm(String filename) {
-  char *ptr = message;
-  File file = SPIFFS.open("/" + filename, "r");
-  if (!file) {
-    Serial.println("There was an error opening the file '/config.txt' for reading");
-    return "<html><head><title>File not found</title></head><body>File not found</body></html>";
-  }
-
-  strcpy(ptr, "<html><head><title>Editor ");
-  strcat(ptr, filename.c_str());
-  strcat(ptr, "</title></head><body><form action=\"edit.html?file=");
-  strcat(ptr, filename.c_str());
-  strcat(ptr, "\" method=\"post\">");
-  strcat(ptr, "<textarea name=\"text\" cols=\"80\" rows=\"40\">");
-  while (file.available()) {
-    String line = readLine(file);  //file.readStringUntil('\n');
-    strcat(ptr, line.c_str()); strcat(ptr, "\n");
-  }
-  strcat(ptr, "</textarea><input type=\"submit\" value=\"Save\"></input></form></body></html>");
-  return message;
-}
-
-
-const char *handleEditPost(AsyncWebServerRequest *request) {
-  Serial.println("Handling post request");
-  AsyncWebParameter *filep = request->getParam("file");
-  if (!filep) return NULL;
-  String filename = filep->value();
-  AsyncWebParameter *textp = request->getParam("text", true);
-  if (!textp) return NULL;
-  String content = textp->value();
-  File file = SPIFFS.open("/" + filename, "w");
-  if (!file) {
-    Serial.println("There was an error opening the file '/" + filename + "'for writing");
-    return "";
-  }
-  file.print(content);
-  file.close();
-  if (strcmp(filename.c_str(), "screens.txt") == 0) {
-    // screens update => reload
-    forceReloadScreenConfig = true;
-  }
-  return "";
-}
-
-const char *createUpdateForm(boolean run) {
-  char *ptr = message;
-  strcpy(ptr, "<html><head><link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"></head><body><form action=\"update.html\" method=\"post\">");
-  if (run) {
-    strcat(ptr, "<p>Doing update, wait until reboot</p>");
-  } else {
-    strcat(ptr, "<input type=\"submit\" name=\"master\" value=\"Master-Update\"></input><br><input type=\"submit\" name=\"devel\" value=\"Devel-Update\">");
-  }
-  strcat(ptr, "</form></body></html>");
-  return message;
-}
-
-const char *handleUpdatePost(AsyncWebServerRequest *request) {
-  Serial.println("Handling post request");
-  int params = request->params();
-  for (int i = 0; i < params; i++) {
-    String param = request->getParam(i)->name();
-    Serial.println(param.c_str());
-    if (param.equals("devel")) {
-      Serial.println("equals devel");
-      updateBin = &updateBinD;
-    }
-    else if (param.equals("master")) {
-      Serial.println("equals master");
-      updateBin = &updateBinM;
-    }
-  }
-  Serial.println("Updating: " + *updateBin);
-  enterMode(ST_UPDATE);
-  return "";
-}
-
-
-const char *sendGPX(AsyncWebServerRequest * request) {
-  Serial.println("\n\n\n********GPX request\n\n");
-  String url = request->url();
-  int index = atoi(url.c_str() + 1);
-  char *ptr = message;
-  if (index < 0 || index >= MAXSONDE) {
-    return "ERROR";
-  }
-  SondeInfo *si = &sonde.sondeList[index];
-  strcpy(si->id, "test");
-  si->lat=48; si->lon=11; si->alt=500;
-  snprintf(ptr, 10240, "<?xml version='1.0' encoding='UTF-8'?>\n"
-           "<gpx version=\"1.1\" creator=\"http://rdzsonde.local\" xmlns=\"http://www.topografix.com/GPX/1/1\" "
-           "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
-           "xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd\">\n"
-           "<metadata>"
-           "<name>Sonde #%d (%s)</name>\n"
-           "<author>rdzTTGOsonde</author>\n"
-           "</metadata>\n"
-           "<wpt lat=\"%f\" lon=\"%f\">\n  <ele>%f</ele>\n  <name>%s</name>\n  <sym>Radio Beacon</sym><type>Sonde</type>\n"
-           "</wpt></gpx>\n", index, si->id, si->lat, si->lon, si->alt, si->id);
-  Serial.println(message);
-  return message;
-}
-
-void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len){
-  if(type == WS_EVT_CONNECT){
-    Serial.println("Websocket client connection received");
-    client->text("Hello from ESP32 Server");
-  } else if(type == WS_EVT_DISCONNECT){
-    Serial.println("Client disconnected");
-  } 
-}
-#if 0
-void onWebSocketEvent(uint8_t clientNum, WStype_t type, uint8_t *payload, size_t length) {
-  switch(type) {
-    case WStype_DISCONNECTED:
-      Serial.printf("[%u] WS client disconnected\n", clientNum);
-      break;
-    case WStype_CONNECTED:
-      {
-        IPAddress ip = webSocket.remoteIP(clientNum);
-        Serial.printf("[%u] WS client connection from %s\n", clientNum, ip.toString().c_str());
-      }
-      break;
-    case WStype_TEXT:
-      //
-      {
-        char msg[80];
-        Serial.printf("[%u] WS client sent me some text: %s\n", clientNum, payload);
-        snprintf(msg, 80, "You sent me: %s\n", payload);
-        webSocket.sendTXT(clientNum, msg);
-      }
-      break;
-    default:
-      break;
-  }
-}
-#endif
-
-
-const char* PARAM_MESSAGE = "message";
-void SetupAsyncServer() {
-  Serial.println("SetupAsyncServer()\n");
-  server.reset();
-  // Route for root / web page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/index.html", String(), false, processor);
-  });
-
-  server.on("/index.html", HTTP_GET, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/index.html", String(), false, processor);
-  });
-
-  server.on("/test.html", HTTP_GET, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/test.html", String(), false, processor);
-  });
-
-  server.on("/qrg.html", HTTP_GET,  [](AsyncWebServerRequest * request) {
-    request->send(200, "text/html", createQRGForm());
-  });
-  server.on("/qrg.html", HTTP_POST, [](AsyncWebServerRequest * request) {
-    handleQRGPost(request);
-    request->send(200, "text/html", createQRGForm());
-  });
-
-  server.on("/wifi.html", HTTP_GET,  [](AsyncWebServerRequest * request) {
-    request->send(200, "text/html", createWIFIForm());
-  });
-  server.on("/wifi.html", HTTP_POST, [](AsyncWebServerRequest * request) {
-    handleWIFIPost(request);
-    request->send(200, "text/html", createWIFIForm());
-  });
-
-  server.on("/config.html", HTTP_GET,  [](AsyncWebServerRequest * request) {
-    request->send(200, "text/html", createConfigForm());
-  });
-  server.on("/config.html", HTTP_POST, [](AsyncWebServerRequest * request) {
-    handleConfigPost(request);
-    request->send(200, "text/html", createConfigForm());
-  });
-
-  server.on("/status.html", HTTP_GET,  [](AsyncWebServerRequest * request) {
-    request->send(200, "text/html", createStatusForm());
-  });
-  server.on("/update.html", HTTP_GET,  [](AsyncWebServerRequest * request) {
-    request->send(200, "text/html", createUpdateForm(0));
-  });
-  server.on("/update.html", HTTP_POST, [](AsyncWebServerRequest * request) {
-    handleUpdatePost(request);
-    request->send(200, "text/html", createUpdateForm(1));
-  });
-
-  server.on("/control.html", HTTP_GET,  [](AsyncWebServerRequest * request) {
-    request->send(200, "text/html", createControlForm());
-  });
-  server.on("/control.html", HTTP_POST, [](AsyncWebServerRequest * request) {
-    handleControlPost(request);
-    request->send(200, "text/html", createControlForm());
-  });
-
-  server.on("/edit.html", HTTP_GET,  [](AsyncWebServerRequest * request) {
-    request->send(200, "text/html", createEditForm(request->getParam(0)->value()));
-  });
-  server.on("/edit.html", HTTP_POST, [](AsyncWebServerRequest * request) {
-    handleEditPost(request);
-    request->send(200, "text/html", createEditForm(request->getParam(0)->value()));
-  });
-
-  // Route to load style.css file
-  server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/style.css", "text/css");
-  });
-
-  // Route to set GPIO to HIGH
-  server.on("/test.php", HTTP_POST, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/index.html", String(), false, processor);
-  });
-
-  server.onNotFound([](AsyncWebServerRequest * request) {
-    if (request->method() == HTTP_OPTIONS) {
-      request->send(200);
-    } else {
-      String url = request->url();
-      if (url.endsWith(".gpx"))
-        request->send(200, "application/gpx+xml", sendGPX(request));
-      else {
-        request->send(SPIFFS, url, "text/html");
-        Serial.printf("URL is %s\n", url.c_str());
-        //request->send(404);
-      }
-    }
-  });
-
-  // Set up web socket
-  ws.onEvent(onWsEvent);
-  server.addHandler(&ws);
-
-  // Start server
-  server.begin();
-}
-
-int fetchWifiIndex(const char *id) {
-  for (int i = 0; i < nNetworks; i++) {
-    if (strcmp(id, networks[i].id.c_str()) == 0) {
-      Serial.printf("Match for %s at %d\n", id, i);
-      return i;
-    }
-    Serial.printf("No match: '%s' vs '%s'\n", id, networks[i].id.c_str());
-    const char *cfgid = networks[i].id.c_str();
-    int len = strlen(cfgid);
-    if (strlen(id) > len) len = strlen(id);
-    Serial.print("SSID: ");
-    for (int i = 0; i < len; i++) {
-      Serial.printf("%02x ", id[i]);
-    } Serial.println("");
-    Serial.print("Conf: ");
-    for (int i = 0; i < len; i++) {
-      Serial.printf("%02x ", cfgid[i]);
-    } Serial.println("");
-  }
-  return -1;
-}
-
-const char *fetchWifiSSID(int i) {
-  return networks[i].id.c_str();
-}
-const char *fetchWifiPw(int i) {
-  return networks[i].pw.c_str();
-}
-
-const char *fetchWifiPw(const char *id) {
-  for (int i = 0; i < nNetworks; i++) {
-    //Serial.print("Comparing '");
-    //Serial.print(id);
-    //Serial.print("' and '");
-    //Serial.print(networks[i].id.c_str());
-    //Serial.println("'");
-    if (strcmp(id, networks[i].id.c_str()) == 0) return networks[i].pw.c_str();
-  }
-  return NULL;
-}
 
 // It is not safe to call millis() in ISR!!!
 // millis() does a division int64_t by 1000 for which gcc creates a library call
@@ -1422,9 +722,6 @@ void setup()
   Serial.println("Clearing display");
   sonde.clearDisplay();
 
-  setupWifiList();
-  Serial.printf("before disp.initFromFile... layouts is %p", disp.layouts);
-
   disp.initFromFile();
   Serial.printf("disp.initFromFile... layouts is %p", disp.layouts);
 
@@ -1494,13 +791,8 @@ void setup()
 
   Serial.println("Setup finished");
   Serial.println();
-  // int returnValue = pthread_create(&wifithread, NULL, wifiloop, (void *)0);
 
-  //  if (returnValue) {
-  //     Serial.println("An error has occurred");
-  //  }
   //   xTaskCreate(mainloop, "MainServer", 10240, NULL, 10, NULL);
-
 
   // == setup default channel list if qrg.txt read fails =========== //
   setupChannelList();
@@ -1522,9 +814,8 @@ void setup()
                1, /* priority */
                NULL);  /* task handle*/
   sonde.setup();
+  SerialBT.begin("ESP32LoRa"); //Bluetooth device name
   initGPS();
-
-  WiFi.onEvent(WiFiEvent);
   getKeyPress();    // clear key buffer
 }
 
@@ -1541,7 +832,6 @@ void enterMode(int mode) {
   mainState = (MainState)mode;
   if (mainState == ST_SPECTRUM) {
     Serial.println("Entering ST_SPECTRUM mode");
-    // -- Display will be cleared when it is drawn
     // sonde.clearDisplay();
     disp.rdis->setFont(FONT_SMALL);
     specTimer = millis();
@@ -1577,6 +867,28 @@ static const char *action2text(uint8_t action) {
   }
   return text;
 }
+
+// encode checksum for UKHAS standard
+char *hexchar = "0123456789ABCDEF";
+void setcheck(char *text, int len) {
+	// "Message=$$RS_%s,%d,%06d,%0.5f,%0.5f,%d,0,0,0,rdzsonde*FFFF\r\n"
+	// "0123456789^                                          ^65432211"
+	uint16_t i, j, x = 0xffff;
+	for (i = 10; i < len - 7; i++) {
+		//Serial.print(text[i]);
+		x ^= text[i] << 8;
+		for (j = 0; j < 8; j++) {
+			if (x & 0x8000)
+				x = (x << 1) ^ 0x1021;
+			else
+				x = (x << 1);
+		}
+	}
+	// len includes checksum characters !
+	for (i = 0; i < 4; i++)
+		text[len -3 -i] = hexchar[(x >> (4*i)) & 0xf]; 
+}
+
 void loopDecoder() {
   // sonde knows the current type and frequency, and delegates to the right decoder
   uint16_t res = sonde.waitRXcomplete();
@@ -1595,7 +907,7 @@ void loopDecoder() {
         return;
       }
       else if (action == ACT_DISPLAY_WIFI) {
-        enterMode(ST_WIFISCAN);
+        // enterMode(ST_WIFISCAN);
         return;
       }
       else if (action == ACT_NEXTSONDE) {
@@ -1606,6 +918,8 @@ void loopDecoder() {
     Serial.printf("current main is %d, current rxtask is %d\n", sonde.currentSonde, rxtask.currentSonde);
   }
 
+// Bluetooth to TNC could be added
+#if 0
   if (!tncclient.connected()) {
     Serial.println("TNC client not connected");
     tncclient = tncserver.available();
@@ -1644,9 +958,42 @@ void loopDecoder() {
         tncclient.write(raw, rawlen);
       }
     }
-    // also send to web socket
     //TODO
   }
+#endif
+
+  static int rawlen = 0;
+  static char raw[101];
+  static int timesince = 99;
+  if ( !(res & 0xff) ) {
+    SondeInfo *s = &sonde.sondeList[rxtask.receiveSonde];
+    Serial.printf("Got position for Bluetooth (%d, %d)\n", s->validID && s->validPos, timesince);
+    if (s->validID && s->validPos) {
+      uint8_t H,m,sec;
+      H = ((s->hhmmss) >>16) &31;
+      m = ((s->hhmmss) >> 8) &63;
+      sec = (s->hhmmss) &63;
+      rawlen = snprintf(raw, 100, "Message=$$RS_%s,%d,%02d:%02d:%02d,%0.5f,%0.5f,%d,0,0,0,rdzsonde*FFFF\r\n",
+			s->id, s->frame, H,m,sec, s->lat, s->lon, (int)s->alt/*speed,temp,humidity,comment*/);
+      setcheck(raw, rawlen);
+    }
+  }
+  timesince++; // roughly count seconds, to rate limit uploads
+  if (rawlen && timesince > 9) {
+ 	SerialBT.write((uint8_t *)raw, rawlen);
+	Serial.println(raw);
+
+	rawlen = 0;
+	timesince = 0;
+  }
+
+  // TODO: Accept commands from Bluetooth
+  if (SerialBT.available()) {
+    while (SerialBT.available())
+      Serial.write(SerialBT.read());
+    Serial.println("<from Bluetooth>");
+  }
+ 
   Serial.println("updateDisplay started");
   if (forceReloadScreenConfig) {
     disp.initFromFile();
@@ -1723,239 +1070,9 @@ void startSpectrumDisplay() {
   enterMode(ST_SPECTRUM);
 }
 
-String translateEncryptionType(wifi_auth_mode_t encryptionType) {
-  switch (encryptionType) {
-    case (WIFI_AUTH_OPEN):
-      return "Open";
-    case (WIFI_AUTH_WEP):
-      return "WEP";
-    case (WIFI_AUTH_WPA_PSK):
-      return "WPA_PSK";
-    case (WIFI_AUTH_WPA2_PSK):
-      return "WPA2_PSK";
-    case (WIFI_AUTH_WPA_WPA2_PSK):
-      return "WPA_WPA2_PSK";
-    case (WIFI_AUTH_WPA2_ENTERPRISE):
-      return "WPA2_ENTERPRISE";
-    default:
-      return "";
-  }
-}
 
-void enableNetwork(bool enable) {
-  if (enable) {
-    MDNS.begin(sonde.config.mdnsname);
-    SetupAsyncServer();
-    udp.begin(WiFi.localIP(), LOCALUDPPORT);
-    MDNS.addService("http", "tcp", 80);
-    if (sonde.config.kisstnc.active) {
-      tncserver.begin();
-    }
-    connected = true;
-  } else {
-    MDNS.end();
-    connected = false;
-  }
-}
-
-
-enum t_wifi_state { WIFI_DISABLED, WIFI_SCAN, WIFI_CONNECT, WIFI_CONNECTED, WIFI_APMODE };
-
+enum t_wifi_state { WIFI_DISABLED };
 static t_wifi_state wifi_state = WIFI_DISABLED;
-
-// Events used only for debug output right now
-void WiFiEvent(WiFiEvent_t event)
-{
-  Serial.printf("[WiFi-event] event: %d\n", event);
-
-  switch (event) {
-    case SYSTEM_EVENT_WIFI_READY:
-      Serial.println("WiFi interface ready");
-      break;
-    case SYSTEM_EVENT_SCAN_DONE:
-      Serial.println("Completed scan for access points");
-      break;
-    case SYSTEM_EVENT_STA_START:
-      Serial.println("WiFi client started");
-      break;
-    case SYSTEM_EVENT_STA_STOP:
-      Serial.println("WiFi clients stopped");
-      break;
-    case SYSTEM_EVENT_STA_CONNECTED:
-      Serial.println("Connected to access point");
-      break;
-    case SYSTEM_EVENT_STA_DISCONNECTED:
-      Serial.println("Disconnected from WiFi access point");
-      if (wifi_state == WIFI_CONNECT) {
-        // If we get a disconnect event while waiting for connection (as I do sometimes with my FritzBox),
-        // just start from scratch with WiFi scan
-        wifi_state = WIFI_DISABLED;
-        WiFi.disconnect(true);
-      }
-      break;
-    case SYSTEM_EVENT_STA_AUTHMODE_CHANGE:
-      Serial.println("Authentication mode of access point has changed");
-      break;
-    case SYSTEM_EVENT_STA_GOT_IP:
-      Serial.print("Obtained IP address: ");
-      Serial.println(WiFi.localIP());
-      break;
-    case SYSTEM_EVENT_STA_LOST_IP:
-      Serial.println("Lost IP address and IP address is reset to 0");
-      break;
-    case SYSTEM_EVENT_STA_WPS_ER_SUCCESS:
-      Serial.println("WiFi Protected Setup (WPS): succeeded in enrollee mode");
-      break;
-    case SYSTEM_EVENT_STA_WPS_ER_FAILED:
-      Serial.println("WiFi Protected Setup (WPS): failed in enrollee mode");
-      break;
-    case SYSTEM_EVENT_STA_WPS_ER_TIMEOUT:
-      Serial.println("WiFi Protected Setup (WPS): timeout in enrollee mode");
-      break;
-    case SYSTEM_EVENT_STA_WPS_ER_PIN:
-      Serial.println("WiFi Protected Setup (WPS): pin code in enrollee mode");
-      break;
-    case SYSTEM_EVENT_AP_START:
-      Serial.println("WiFi access point started");
-      break;
-    case SYSTEM_EVENT_AP_STOP:
-      Serial.println("WiFi access point  stopped");
-      break;
-    case SYSTEM_EVENT_AP_STACONNECTED:
-      Serial.println("Client connected");
-      break;
-    case SYSTEM_EVENT_AP_STADISCONNECTED:
-      Serial.println("Client disconnected");
-      break;
-    case SYSTEM_EVENT_AP_STAIPASSIGNED:
-      Serial.println("Assigned IP address to client");
-      break;
-    case SYSTEM_EVENT_AP_PROBEREQRECVED:
-      Serial.println("Received probe request");
-      break;
-    case SYSTEM_EVENT_GOT_IP6:
-      Serial.println("IPv6 is preferred");
-      break;
-    case SYSTEM_EVENT_ETH_START:
-      Serial.println("Ethernet started");
-      break;
-    case SYSTEM_EVENT_ETH_STOP:
-      Serial.println("Ethernet stopped");
-      break;
-    case SYSTEM_EVENT_ETH_CONNECTED:
-      Serial.println("Ethernet connected");
-      break;
-    case SYSTEM_EVENT_ETH_DISCONNECTED:
-      Serial.println("Ethernet disconnected");
-      break;
-    case SYSTEM_EVENT_ETH_GOT_IP:
-      Serial.println("Obtained IP address");
-      break;
-    default:
-      break;
-  }
-}
-
-
-void wifiConnect(int16_t res) {
-  Serial.printf("WiFi scan result: found %d networks\n", res);
-
-  // pick best network
-  int bestEntry = -1;
-  int bestRSSI = INT_MIN;
-  uint8_t bestBSSID[6];
-  int32_t bestChannel = 0;
-
-  for (int8_t i = 0; i < res; i++) {
-    String ssid_scan;
-    int32_t rssi_scan;
-    uint8_t sec_scan;
-    uint8_t* BSSID_scan;
-    int32_t chan_scan;
-    WiFi.getNetworkInfo(i, ssid_scan, sec_scan, rssi_scan, BSSID_scan, chan_scan);
-    int networkEntry = fetchWifiIndex(ssid_scan.c_str());
-    if (networkEntry < 0) continue;
-    if (rssi_scan <= bestRSSI) continue;
-    bestEntry = networkEntry;
-    bestRSSI = rssi_scan;
-    bestChannel = chan_scan;
-    memcpy((void*) &bestBSSID, (void*) BSSID_scan, sizeof(bestBSSID));
-  }
-  WiFi.scanDelete();
-  if (bestEntry >= 0) {
-    Serial.printf("WiFi Connecting BSSID: %02X:%02X:%02X:%02X:%02X:%02X SSID: %s PW %s Channel: %d (RSSI %d)\n", bestBSSID[0], bestBSSID[1], bestBSSID[2], bestBSSID[3], bestBSSID[4], bestBSSID[5], fetchWifiSSID(bestEntry), fetchWifiPw(bestEntry), bestChannel, bestRSSI);
-    WiFi.begin(fetchWifiSSID(bestEntry), fetchWifiPw(bestEntry), bestChannel, bestBSSID);
-    wifi_state = WIFI_CONNECT;
-  } else {
-    // rescan
-    // wifiStart();
-    WiFi.disconnect(true);
-    wifi_state = WIFI_DISABLED;
-  }
-}
-
-static int wifi_cto;
-
-void loopWifiBackground() {
-  // Serial.printf("WifiBackground: state %d\n", wifi_state);
-  // handle Wifi station mode in background
-  if (sonde.config.wifi == 0 || sonde.config.wifi == 2) return; // nothing to do if disabled or access point mode
-
-  if (wifi_state == WIFI_DISABLED) {  // stopped => start can
-    wifi_state = WIFI_SCAN;
-    Serial.println("WiFi start scan");
-    WiFi.scanNetworks(true); // scan in async mode
-  } else if (wifi_state == WIFI_SCAN) {
-    int16_t res = WiFi.scanComplete();
-    if (res == 0 || res == WIFI_SCAN_FAILED) {
-      // retry
-      Serial.println("WiFi restart scan");
-      WiFi.disconnect(true);
-      wifi_state = WIFI_DISABLED;
-      return;
-    }
-    if (res == WIFI_SCAN_RUNNING) {
-      return;
-    }
-    // Scan finished, try to connect
-    wifiConnect(res);
-    wifi_cto = 0;
-  } else if (wifi_state == WIFI_CONNECT) {
-    wifi_cto++;
-    if (WiFi.isConnected()) {
-      wifi_state = WIFI_CONNECTED;
-      // update IP in display
-      String localIPstr = WiFi.localIP().toString();
-      sonde.setIP(localIPstr.c_str(), false);
-      sonde.updateDisplayIP();
-      enableNetwork(true);
-    }
-    if (wifi_cto > 20) { // failed, restart scanning
-      wifi_state = WIFI_DISABLED;
-      WiFi.disconnect(true);
-    }
-  } else if (wifi_state == WIFI_CONNECTED) {
-    if (!WiFi.isConnected()) {
-      sonde.setIP("", false);
-      sonde.updateDisplayIP();
-
-      wifi_state = WIFI_DISABLED;  // restart scan
-      enableNetwork(false);
-      WiFi.disconnect(true);
-    }
-  }
-}
-
-void startAP() {
-  Serial.println("Activating access point mode");
-  wifi_state = WIFI_APMODE;
-  WiFi.softAP(networks[0].id.c_str(), networks[0].pw.c_str());
-  IPAddress myIP = WiFi.softAPIP();
-  String myIPstr = myIP.toString();
-  sonde.setIP(myIPstr.c_str(), true);
-  sonde.updateDisplayIP();
-  // enableNetwork(true); done later in WifiLoop.
-}
 
 void initialMode() {
   if (sonde.config.touch_thresh == 0) {
@@ -1991,300 +1108,15 @@ void loopTouchCalib() {
   }
 }
 
-// Wifi modes
-// 0: disabled. directly start initial mode (spectrum or scanner)
-// 1: station mode in background. directly start initial mode (spectrum or scanner)
-// 2: access point mode in background. directly start initial mode (spectrum or scanner)
-// 3: traditional sync. WifiScan. Tries to connect to a network, in case of failure activates AP.
-//    Mode 3 shows more debug information on serial port and display.
-#define MAXWIFIDELAY 20
-static const char* _scan[2] = {"/", "\\"};
-void loopWifiScan() {
-  if (sonde.config.wifi == 0) {   // no Wifi
-    wifi_state = WIFI_DISABLED;
-    initialMode();
-    return;
-  }
-  if (sonde.config.wifi == 1) { // station mode, setup in background
-    wifi_state = WIFI_DISABLED;  // will start scanning in wifiLoopBackgroiund
-    initialMode();
-    return;
-  }
-  if (sonde.config.wifi == 2) { // AP mode, setup in background
-    startAP();
-    initialMode();
-    return;
-  }
-  // wifi==3 => original mode with non-async wifi setup
-  disp.rdis->setFont(FONT_SMALL);
-  disp.rdis->drawString(0, 0, "WiFi Scan...");
-  uint8_t dispw, disph, dispxs, dispys;
-  disp.rdis->getDispSize(&disph, &dispw, &dispxs, &dispys);
-
-  int line = 0;
-  int cnt = 0;
-
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_STA);
-  int index = -1;
-  int n = WiFi.scanNetworks();
-  for (int i = 0; i < n; i++) {
-    Serial.print("Network name: ");
-    String ssid = WiFi.SSID(i);
-    Serial.println(ssid);
-    disp.rdis->drawString(0, dispys * (1 + line), ssid.c_str());
-    line = (line + 1) % (disph / dispys);
-    Serial.print("Signal strength: ");
-    Serial.println(WiFi.RSSI(i));
-    Serial.print("MAC address: ");
-    Serial.println(WiFi.BSSIDstr(i));
-    Serial.print("Encryption type: ");
-    String encryptionTypeDescription = translateEncryptionType(WiFi.encryptionType(i));
-    Serial.println(encryptionTypeDescription);
-    Serial.println("-----------------------");
-    int curidx = fetchWifiIndex(ssid.c_str());
-    if (curidx >= 0 && index == -1) {
-      index = curidx;
-      Serial.printf("Match found at scan entry %d, config network %d\n", i, index);
-    }
-  }
-  int lastl = (disph / dispys - 2) * dispys;
-  if (index >= 0) { // some network was found
-    Serial.print("Connecting to: "); Serial.print(fetchWifiSSID(index));
-    Serial.print(" with password "); Serial.println(fetchWifiPw(index));
-
-    disp.rdis->drawString(0, lastl, "Conn:");
-    disp.rdis->drawString(6 * dispxs, lastl, fetchWifiSSID(index));
-    WiFi.begin(fetchWifiSSID(index), fetchWifiPw(index));
-    while (WiFi.status() != WL_CONNECTED && cnt < MAXWIFIDELAY)  {
-      delay(500);
-      Serial.print(".");
-      if (cnt == 5) {
-        // my FritzBox needs this for reconnecting
-        WiFi.disconnect(true);
-        delay(500);
-        WiFi.begin(fetchWifiSSID(index), fetchWifiPw(index));
-        Serial.print("Reconnecting to: "); Serial.print(fetchWifiSSID(index));
-        Serial.print(" with password "); Serial.println(fetchWifiPw(index));
-        delay(500);
-      }
-      disp.rdis->drawString(15 * dispxs, lastl + dispys, _scan[cnt & 1]);
-      cnt++;
-    }
-  }
-  if (index < 0 || cnt >= MAXWIFIDELAY) { // no network found, or connect not successful
-    WiFi.disconnect(true);
-    delay(1000);
-    startAP();
-    IPAddress myIP = WiFi.softAPIP();
-    Serial.print("AP IP address: ");
-    Serial.println(myIP);
-    disp.rdis->drawString(0, lastl, "AP:             ");
-    disp.rdis->drawString(6 * dispxs, lastl + 1, networks[0].id.c_str());
-    delay(3000);
-  } else {
-    Serial.println("");
-    Serial.println("WiFi connected");
-    Serial.println("IP address: ");
-    String localIPstr = WiFi.localIP().toString();
-    Serial.println(localIPstr);
-    sonde.setIP(localIPstr.c_str(), false);
-    sonde.updateDisplayIP();
-    wifi_state = WIFI_CONNECTED;
-    bool hasRS92 = false;
-    for (int i = 0; i < MAXSONDE; i++) {
-      if (sonde.sondeList[i].type == STYPE_RS92) hasRS92 = true;
-    }
-    if (hasRS92) {
-      geteph();
-      get_eph("/brdc");
-    }
-    delay(3000);
-  }
-  enableNetwork(true);
-  initialMode();
-}
-
-
-/// Testing OTA Updates
-/// somewhat based on Arduino's AWS_S3_OTA_Update
-// Utility to extract header value from headers
-String getHeaderValue(String header, String headerName) {
-  return header.substring(strlen(headerName.c_str()));
-}
-
-// OTA Logic
-void execOTA() {
-  int contentLength = 0;
-  bool isValidContentType = false;
-  sonde.clearDisplay();
-  disp.rdis->setFont(FONT_SMALL);
-  disp.rdis->drawString(0, 0, "C:");
-  String dispHost = updateHost.substring(0, 14);
-  disp.rdis->drawString(2, 0, dispHost.c_str());
-
-  Serial.println("Connecting to: " + updateHost);
-  // Connect to Update host
-  if (client.connect(updateHost.c_str(), updatePort)) {
-    // Connection succeeded, fecthing the bin
-    Serial.println("Fetching bin: " + String(*updateBin));
-    disp.rdis->drawString(0, 1, "Fetching update");
-
-    // Get the contents of the bin file
-    client.print(String("GET ") + *updateBin + " HTTP/1.1\r\n" +
-                 "Host: " + updateHost + "\r\n" +
-                 "Cache-Control: no-cache\r\n" +
-                 "Connection: close\r\n\r\n");
-
-    // Check what is being sent
-    //    Serial.print(String("GET ") + bin + " HTTP/1.1\r\n" +
-    //                 "Host: " + host + "\r\n" +
-    //                 "Cache-Control: no-cache\r\n" +
-    //                 "Connection: close\r\n\r\n");
-
-    unsigned long timeout = millis();
-    while (client.available() == 0) {
-      if (millis() - timeout > 5000) {
-        Serial.println("Client Timeout !");
-        client.stop();
-        return;
-      }
-    }
-    // Once the response is available,
-    // check stuff
-
-    /*
-       Response Structure
-        HTTP/1.1 200 OK
-        x-amz-id-2: NVKxnU1aIQMmpGKhSwpCBh8y2JPbak18QLIfE+OiUDOos+7UftZKjtCFqrwsGOZRN5Zee0jpTd0=
-        x-amz-request-id: 2D56B47560B764EC
-        Date: Wed, 14 Jun 2017 03:33:59 GMT
-        Last-Modified: Fri, 02 Jun 2017 14:50:11 GMT
-        ETag: "d2afebbaaebc38cd669ce36727152af9"
-        Accept-Ranges: bytes
-        Content-Type: application/octet-stream
-        Content-Length: 357280
-        Server: AmazonS3
-
-        {{BIN FILE CONTENTS}}
-
-    */
-    while (client.available()) {
-      // read line till /n
-      String line = client.readStringUntil('\n');
-      // remove space, to check if the line is end of headers
-      line.trim();
-
-      // if the the line is empty,
-      // this is end of headers
-      // break the while and feed the
-      // remaining `client` to the
-      // Update.writeStream();
-      if (!line.length()) {
-        //headers ended
-        break; // and get the OTA started
-      }
-
-      // Check if the HTTP Response is 200
-      // else break and Exit Update
-      if (line.startsWith("HTTP/1.1")) {
-        if (line.indexOf("200") < 0) {
-          Serial.println("Got a non 200 status code from server. Exiting OTA Update.");
-          break;
-        }
-      }
-
-      // extract headers here
-      // Start with content length
-      if (line.startsWith("Content-Length: ")) {
-        contentLength = atoi((getHeaderValue(line, "Content-Length: ")).c_str());
-        Serial.println("Got " + String(contentLength) + " bytes from server");
-      }
-
-      // Next, the content type
-      if (line.startsWith("Content-Type: ")) {
-        String contentType = getHeaderValue(line, "Content-Type: ");
-        Serial.println("Got " + contentType + " payload.");
-        if (contentType == "application/octet-stream") {
-          isValidContentType = true;
-        }
-      }
-    }
-  } else {
-    // Connect to updateHost failed
-    // May be try?
-    // Probably a choppy network?
-    Serial.println("Connection to " + String(updateHost) + " failed. Please check your setup");
-    // retry??
-    // execOTA();
-  }
-
-  // Check what is the contentLength and if content type is `application/octet-stream`
-  Serial.println("contentLength : " + String(contentLength) + ", isValidContentType : " + String(isValidContentType));
-  disp.rdis->drawString(0, 2, "Len: ");
-  String cls = String(contentLength);
-  disp.rdis->drawString(5, 2, cls.c_str());
-
-  // check contentLength and content type
-  if (contentLength && isValidContentType) {
-    // Check if there is enough to OTA Update
-    bool canBegin = Update.begin(contentLength);
-    disp.rdis->drawString(0, 4, "Starting update");
-
-    // If yes, begin
-    if (canBegin) {
-      Serial.println("Begin OTA. This may take 2 - 5 mins to complete. Things might be quite for a while.. Patience!");
-      // No activity would appear on the Serial monitor
-      // So be patient. This may take 2 - 5mins to complete
-      disp.rdis->drawString(0, 5, "Please wait!");
-      size_t written = Update.writeStream(client);
-
-      if (written == contentLength) {
-        Serial.println("Written : " + String(written) + " successfully");
-      } else {
-        Serial.println("Written only : " + String(written) + "/" + String(contentLength) + ". Retry?" );
-        // retry??
-        // execOTA();
-      }
-
-      if (Update.end()) {
-        Serial.println("OTA done!");
-        if (Update.isFinished()) {
-          Serial.println("Update successfully completed. Rebooting.");
-          disp.rdis->drawString(0, 7, "Rebooting....");
-          delay(1000);
-          ESP.restart();
-        } else {
-          Serial.println("Update not finished? Something went wrong!");
-        }
-      } else {
-        Serial.println("Error Occurred. Error #: " + String(Update.getError()));
-      }
-    } else {
-      // not enough space to begin OTA
-      // Understand the partitions and
-      // space availability
-      Serial.println("Not enough space to begin OTA");
-      client.flush();
-    }
-  } else {
-    Serial.println("There was no content in the response");
-    client.flush();
-  }
-  // Back to some normal state
-  enterMode(ST_DECODER);
-}
-
-
 
 void loop() {
   // Serial.printf("\nRunning main loop in state %d. free heap: %d;\n", mainState, ESP.getFreeHeap());
   // Serial.printf("currentDisp:%d lastDisp:%d\n", currentDisplay, lastDisplay);
   switch (mainState) {
     case ST_DECODER: loopDecoder(); break;
+    case ST_WIFISCAN:
+    case ST_UPDATE:
     case ST_SPECTRUM: loopSpectrum(); break;
-    case ST_WIFISCAN: loopWifiScan(); break;
-    case ST_UPDATE: execOTA(); break;
     case ST_TOUCHCALIB: loopTouchCalib(); break;
   }
 #if 0
@@ -2296,7 +1128,6 @@ void loop() {
   Serial.print(" LNA Gain: "),
                Serial.println(gain);
 #endif
-  loopWifiBackground();
   if (currentDisplay != lastDisplay && (mainState == ST_DECODER)) {
     disp.setLayout(currentDisplay);
     sonde.clearDisplay();
