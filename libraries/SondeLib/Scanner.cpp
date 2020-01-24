@@ -9,7 +9,9 @@
 #define PIXSAMPL (50/CHANBW)
 #define SMOOTH 3
 //#define STARTF 401000000
-#define NCHAN ((int)(6000/CHANBW))
+
+// Scan more than we plot, not fewer
+#define NCHAN (130)
 
 double STARTF = (400 * 1000000);
 //int CHANBW = (sonde.config.channelbw);
@@ -66,7 +68,7 @@ void Scanner::scan()
 {
 	// Configure 
 	sx1278.writeRegister(REG_PLL_HOP, 0x80);   // FastHopOn
-	sx1278.setRxBandwidth(CHANBW*1000);
+	// sx1278.setRxBandwidth(CHANBW*1000);
 	sx1278.writeRegister(REG_RSSI_CONFIG, SMOOTH&0x07);
 	sx1278.setFrequency(STARTF);
 	sx1278.writeRegister(REG_OP_MODE, FSK_RX_MODE);
