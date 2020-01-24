@@ -5,16 +5,13 @@
 #include "Sonde.h"
 #include "Display.h"
 
-#define CHANBW 10
-#define PIXSAMPL (50/CHANBW)
-#define SMOOTH 3
-//#define STARTF 401000000
-#define NCHAN ((int)(6000/CHANBW))
-
-double STARTF = (400 * 1000000);
-//int CHANBW = (sonde.config.channelbw);
-//int NCHAN = ((int)(6000/CHANBW));
-//int PIXSAMPL = (50/CHANBW);
+// Need scanning bandwidth to match receive Bw
+// 120 * 6.3 kHz = 0.8 MHz (405 - 405.8)
+#define CHANBW (6300)
+#define PIXSAMPL (1)
+#define SMOOTH (3)
+#define STARTF (405e6)
+#define NCHAN (128)
 
 int scanresult[NCHAN];
 int scandisp[NCHAN/PIXSAMPL];
@@ -66,7 +63,7 @@ void Scanner::scan()
 {
 	// Configure 
 	sx1278.writeRegister(REG_PLL_HOP, 0x80);   // FastHopOn
-	sx1278.setRxBandwidth(CHANBW*1000);
+	sx1278.setRxBandwidth(CHANBW);
 	sx1278.writeRegister(REG_RSSI_CONFIG, SMOOTH&0x07);
 	sx1278.setFrequency(STARTF);
 	sx1278.writeRegister(REG_OP_MODE, FSK_RX_MODE);
@@ -76,7 +73,7 @@ void Scanner::scan()
 	uint32_t lastfrf=-1;
 	{   // one interation: may miss RS41 transmissions
 	    for(int i=0; i<NCHAN; i++) {
-		float freq = STARTF + 1000.0*i*CHANBW;
+		float freq = STARTF + i*CHANBW;
 		uint32_t frf = freq * 1.0 * (1<<19) / SX127X_CRYSTAL_FREQ;
 		if( (lastfrf>>16)!=(frf>>16) ) {
         		sx1278.writeRegister(REG_FRF_MSB, (frf&0xff0000)>>16);
@@ -87,8 +84,8 @@ void Scanner::scan()
         	sx1278.writeRegister(REG_FRF_LSB, (frf&0x0000ff));
 		lastfrf = frf;
 		// Wait TS_HOP (20us) + TS_RSSI ( 2^(SMOOTH+1) / 4 / CHANBW us)
-		int wait = 20 + 1000*(1<<(SMOOTH+1))/4/CHANBW; // 420us * 600 => 250ms
-		delayMicroseconds(wait+5);
+		// int wait = 20 + 1000*(1<<(SMOOTH+1))/4/CHANBW; // 420us * 900 => 480ms
+		delayMicroseconds(500);
 		int rssi = -(int)sx1278.readRegister(REG_RSSI_VALUE_FSK);
 		scanresult[i] = rssi;
 	    }
@@ -97,17 +94,8 @@ void Scanner::scan()
 	Serial.print("Scan time: ");
 	Serial.println(duration);
 	for(int i=0; i<(NCHAN/PIXSAMPL); i++) {
-		scandisp[i]=scanresult[i*PIXSAMPL];
-		// for(int j=1; j<PIXSAMPL; j++) { scandisp[i]+=scanresult[i*PIXLSAMPL+j]; }
-		for(int j=1; j<PIXSAMPL; j++) {
-			if (scanresult[i*PIXSAMPL+j] > scandisp[i])
-				scandisp[i] = scanresult[i*PIXSAMPL+j];
-		}
-		// Serial.print(scanresult[i]); Serial.print(", ");
-	//}
-	//Serial.println("\n");
-	//for(int i=0; i<NCHAN/PIXSAMPL; i++) {
-		// scandisp[i]/=PIXSAMPL;
+		// smooth over time
+		scandisp[i]=(scanresult[i] + scandisp[i]) / 2 ;
                 Serial.print(scandisp[i]); Serial.print(", ");
 	}
 	Serial.println("\n");
