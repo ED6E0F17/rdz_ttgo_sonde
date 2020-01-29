@@ -96,8 +96,6 @@ void Scanner::scan()
 	    }
 	}
 	unsigned long duration = millis()-start;
-	Serial.print("Scan time: ");
-	Serial.println(duration);
 	for(int i=0; i<(NCHAN/PIXSAMPL); i++) {
 		scandisp[i]=scanresult[i*PIXSAMPL];
 		// for(int j=1; j<PIXSAMPL; j++) { scandisp[i]+=scanresult[i*PIXLSAMPL+j]; }
@@ -105,14 +103,7 @@ void Scanner::scan()
 			if (scanresult[i*PIXSAMPL+j] > scandisp[i])
 				scandisp[i] = scanresult[i*PIXSAMPL+j];
 		}
-		// Serial.print(scanresult[i]); Serial.print(", ");
-	//}
-	//Serial.println("\n");
-	//for(int i=0; i<NCHAN/PIXSAMPL; i++) {
-		// scandisp[i]/=PIXSAMPL;
-                Serial.print(scandisp[i]); Serial.print(", ");
 	}
-	Serial.println("\n");
 }
 
 Scanner scanner = Scanner();

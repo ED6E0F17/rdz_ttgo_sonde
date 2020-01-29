@@ -354,7 +354,6 @@ void Sonde::nextRxSonde() {
 			if(rxtask.currentSonde>=nSonde) rxtask.currentSonde=0;
 		}
 	}
-	Serial.printf("nextRxSonde: %d\n", rxtask.currentSonde);
 }
 void Sonde::nextRxFreq(int addkhz) {
 	// last entry is for the variable frequency
@@ -363,7 +362,6 @@ void Sonde::nextRxFreq(int addkhz) {
 	sondeList[rxtask.currentSonde].freq += addkhz*0.001;
 	if(sondeList[rxtask.currentSonde].freq>406)
 		sondeList[rxtask.currentSonde].freq = 400;
-        Serial.printf("nextRxFreq: %d\n", rxtask.currentSonde);
 }
 SondeInfo *Sonde::si() {
 	return &sondeList[currentSonde];
@@ -377,8 +375,6 @@ void Sonde::setup() {
 	}
 
 	// update receiver config
-	Serial.print("\nSonde::setup() on sonde index ");
-	Serial.println(rxtask.currentSonde);
 	switch(sondeList[rxtask.currentSonde].type) {
 	case STYPE_RS41:
 		rs41.setup(sondeList[rxtask.currentSonde].freq * 1000000);
@@ -394,10 +390,6 @@ void Sonde::setup() {
 		m10.setup( sondeList[rxtask.currentSonde].freq * 1000000);
 		break;
 	}
-	// debug
-	float afcbw = sx1278.getAFCBandwidth();
-	float rxbw = sx1278.getRxBandwidth();
-	Serial.printf("AFC BW: %f  RX BW: %f\n", afcbw, rxbw);
 }
 
 extern void flashLed(int ms);
@@ -430,7 +422,7 @@ void Sonde::receive() {
                 }
         } else { // RX not ok
 		if(res==RX_ERROR) flashLed(100);
-		Serial.printf("RX result %d, laststate was %d\n", res, si->lastState);
+		// Serial.printf("RX result %d, laststate was %d\n", res, si->lastState);
                 if(si->lastState != 0) {
                         si->norxStart = millis();
                         si->lastState = 0;
@@ -446,7 +438,6 @@ void Sonde::receive() {
 	int event = getKeyPressEvent();
 	if (!event) event = timeoutEvent(si);
 	int action = (event==EVT_NONE) ? ACT_NONE : disp.layout->actions[event];
-	Serial.printf("event %x: action is %x\n", event, action);
 	// If action is to move to a different sonde index, we do update things here, set activate
 	// to force the sx1278 task to call sonde.setup(), and pass information about sonde to
 	// main loop (display update...)
@@ -463,7 +454,6 @@ void Sonde::receive() {
 		}
 	}
 	res = (action<<8) | (res&0xff);
-	Serial.printf("receive Result is %04x\n", res);
 	// let waitRXcomplete resume...
 	rxtask.receiveResult = res;
 }
@@ -476,7 +466,6 @@ rxloop:
         while( rxtask.receiveResult==0xFFFF && millis()-t0 < 3000) { delay(50); }
 	if( rxtask.receiveResult == RX_UPDATERSSI ) {
 		rxtask.receiveResult = 0xFFFF;
-		Serial.print("RSSI update: ");
 		disp.updateDisplayRSSI();
 		goto rxloop;
 	}
@@ -488,8 +477,6 @@ rxloop:
 		res = rxtask.receiveResult;
 	}
         rxtask.receiveResult = 0xFFFF;
-	/// TODO: THis has caused an exception when swithcing back to spectrumm...
-        Serial.printf("waitRXcomplete returning %04x (%s)\n", res, (res&0xff)<4?RXstr[res&0xff]:"");
 	// currently used only by RS92
 	switch(sondeList[rxtask.receiveSonde].type) {
 	case STYPE_RS41:
@@ -513,30 +500,29 @@ rxloop:
 
 uint8_t Sonde::timeoutEvent(SondeInfo *si) {
 	uint32_t now = millis();
-#if 1
+#if 0
 	Serial.printf("Timeout check: %d - %d vs %d; %d - %d vs %d; %d - %d vs %d\n",
 		now, si->viewStart, disp.layout->timeouts[0],
 		now, si->rxStart, disp.layout->timeouts[1],
 		now, si->norxStart, disp.layout->timeouts[2]);
 #endif
-	Serial.printf("lastState is %d\n", si->lastState);
+	//Serial.printf("lastState is %d\n", si->lastState);
 	if(disp.layout->timeouts[0]>=0 && now - si->viewStart >= disp.layout->timeouts[0]) {
-		Serial.println("View timer expired");
+		// Serial.println("View timer expired");
 		return EVT_VIEWTO;
 	}
 	if(si->lastState==1 && disp.layout->timeouts[1]>=0 && now - si->rxStart >= disp.layout->timeouts[1]) {
-		Serial.println("RX timer expired");
+		// Serial.println("RX timer expired");
 		return EVT_RXTO;
 	}
 	if(si->lastState==0 && disp.layout->timeouts[2]>=0 && now - si->norxStart >= disp.layout->timeouts[2]) {
-		Serial.println("NORX timer expired");
+		// Serial.println("NORX timer expired");
 		return EVT_NORXTO;
 	}
 	return 0;
 }
 
 uint8_t Sonde::updateState(uint8_t event) {
-	Serial.printf("Sonde::updateState for event %d\n", event);
 	// No change
 	if(event==ACT_NONE) return 0xFF;
 
@@ -571,7 +557,6 @@ uint8_t Sonde::updateState(uint8_t event) {
 			Serial.println("WARNNG: next layout out of range");
 			n = config.display[1];
 		}
-		Serial.printf("Setting display mode %d\n", n);
 		disp.setLayout(n);
 		sonde.clearDisplay();
 		return 0xFF;
@@ -581,7 +566,6 @@ uint8_t Sonde::updateState(uint8_t event) {
 	// TODO: THis should be done in sx1278 task, not in main loop!!!!!
 	if(event==ACT_NEXTSONDE) {
 		sonde.nextConfig();
-		Serial.printf("advancing to next sonde %d\n", sonde.currentSonde);
 		return event;
 	}
 	if (event==ACT_PREVSONDE) {

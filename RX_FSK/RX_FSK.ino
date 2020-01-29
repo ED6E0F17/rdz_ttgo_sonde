@@ -1068,13 +1068,13 @@ void sx1278Task(void *parameter) {
   while (1) {
     if (rxtask.activate >= 128) {
       // activating sx1278 background task...
-      Serial.printf("rx task: activate=%d  mainstate=%d\n", rxtask.activate, rxtask.mainState);
+      // Serial.printf("rx task: activate=%d  mainstate=%d\n", rxtask.activate, rxtask.mainState);
       rxtask.mainState = ST_DECODER;
       rxtask.currentSonde = rxtask.activate & 0x7F;
-      Serial.println("rx task: calling sonde.setup()");
+      // Serial.println("rx task: calling sonde.setup()");
       sonde.setup();
     } else if (rxtask.activate != -1) {
-      Serial.printf("rx task: activate=%d  mainstate=%d\n", rxtask.activate, rxtask.mainState);
+      // Serial.printf("rx task: activate=%d  mainstate=%d\n", rxtask.activate, rxtask.mainState);
       rxtask.mainState = rxtask.activate;
     }
     rxtask.activate = -1;
@@ -1113,7 +1113,6 @@ void IRAM_ATTR touchISR2() {
 void checkTouchButton(Button & button) {
   if (button.isTouched) {
     int tmp = touchRead(button.pin & 0x7f);
-    Serial.printf("touch read %d: value is %d\n", button.pin & 0x7f, tmp);
     if (tmp > sonde.config.touch_thresh + 5) {
       button.isTouched = false;
       unsigned long elapsed = my_millis() - button.keydownTime;
@@ -1528,7 +1527,6 @@ void setup()
 }
 
 void enterMode(int mode) {
-  Serial.printf("enterMode(%d)\n", mode);
   // Backround RX task should only be active in mode ST_DECODER for now
   // (future changes might use RX background task for spectrum display as well)
   if (mode != ST_DECODER) {
@@ -1539,7 +1537,6 @@ void enterMode(int mode) {
   }
   mainState = (MainState)mode;
   if (mainState == ST_SPECTRUM) {
-    Serial.println("Entering ST_SPECTRUM mode");
     // -- Display will be cleared when it is drawn
     // sonde.clearDisplay();
     disp.rdis->setFont(FONT_SMALL);
@@ -1602,14 +1599,14 @@ void loopDecoder() {
   // sonde knows the current type and frequency, and delegates to the right decoder
   uint16_t res = sonde.waitRXcomplete();
   int action;
-  Serial.printf("waitRX result is %x\n", (int)res);
   action = (int)(res >> 8);
-  // TODO: update displayed sonde?
+
+  int rssi = sx1278.getRSSI();
+  Serial.print("CurrentRSSI=");
+  Serial.println(rssi);
 
   if (action != ACT_NONE) {
-    Serial.printf("Loop: triggering action %s (%d)\n", action2text(action), action);
     action = sonde.updateState(action);
-    Serial.printf("Loop: action is %d, sonde index is %d\n", action, sonde.currentSonde);
     if (action != 255) {
       if (action == ACT_DISPLAY_SPECTRUM) {
         enterMode(ST_SPECTRUM);
@@ -1624,11 +1621,9 @@ void loopDecoder() {
         return;
       }
     }
-    Serial.printf("current main is %d, current rxtask is %d\n", sonde.currentSonde, rxtask.currentSonde);
   }
 
   if (!tncclient.connected()) {
-    Serial.println("TNC client not connected");
     tncclient = tncserver.available();
     if (tncclient.connected()) {
       Serial.println("new TCP KISS connection");
@@ -1695,14 +1690,12 @@ void loopDecoder() {
 	timesince = 0;
   }
 
-  Serial.println("updateDisplay started");
   if (forceReloadScreenConfig) {
     disp.initFromFile();
     sonde.clearDisplay();
     forceReloadScreenConfig = false;
   }
   sonde.updateDisplay();
-  Serial.println("updateDisplay done");
 }
 
 void setCurrentDisplay(int value) {
@@ -2336,14 +2329,11 @@ void loop() {
     case ST_UPDATE: execOTA(); break;
     case ST_TOUCHCALIB: loopTouchCalib(); break;
   }
-#if 0
-  int rssi = sx1278.getRSSI();
-  Serial.print("  RSSI: ");
-  Serial.print(rssi);
 
+#if 0
   int gain = sx1278.getLNAGain();
-  Serial.print(" LNA Gain: "),
-               Serial.println(gain);
+  Serial.print(" LNA Gain: ");
+  Serial.println(gain);
 #endif
   loopWifiBackground();
   if (currentDisplay != lastDisplay && (mainState == ST_DECODER)) {
