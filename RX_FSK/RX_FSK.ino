@@ -1576,6 +1576,28 @@ static const char *action2text(uint8_t action) {
   }
   return text;
 }
+
+// encode checksum for UKHAS standard
+char *hexchar = "0123456789ABCDEF";
+void setcheck(char *text, int len) {
+	// "Message=$$RS_%s,%d,%06d,%0.5f,%0.5f,%d,0,0,0,rdzsonde*FFFF\r\n"
+	// "0123456789^                                          ^65432211"
+	uint16_t i, j, x = 0xffff;
+	for (i = 10; i < len - 7; i++) {
+		//Serial.print(text[i]);
+		x ^= text[i] << 8;
+		for (j = 0; j < 8; j++) {
+			if (x & 0x8000)
+				x = (x << 1) ^ 0x1021;
+			else
+				x = (x << 1);
+		}
+	}
+	// len includes checksum characters !
+	for (i = 0; i < 4; i++)
+		text[len -3 -i] = hexchar[(x >> (4*i)) & 0xf];
+}
+
 void loopDecoder() {
   // sonde knows the current type and frequency, and delegates to the right decoder
   uint16_t res = sonde.waitRXcomplete();
@@ -1646,6 +1668,33 @@ void loopDecoder() {
     // also send to web socket
     //TODO
   }
+
+  // UKHAS string for serial gateway
+  static int rawlen = 0;
+  static char raw[101];
+  static int timesince = 99;
+  if ( !(res & 0xff) ) {
+    SondeInfo *s = &sonde.sondeList[rxtask.receiveSonde];
+    // Serial.printf("Got position (%d, %d)\n", s->validID && s->validPos, timesince);
+    if (s->validID && s->validPos) {
+      int sec = (s->time + 18) % 86400; // convert utc back to gps time of day
+      int H,m;
+      m = sec / 60;
+      sec = sec % 60;
+      H = m / 60;
+      m = m % 60;
+      rawlen = snprintf(raw, 100, "Message=$$RS_%s,%d,%02d:%02d:%02d,%0.5f,%0.5f,%d,0,0,0,rdzsonde*FFFF\r\n",
+			s->id, s->frame, H,m,sec, s->lat, s->lon, (int)s->alt/*speed,temp,humidity,comment*/);
+      setcheck(raw, rawlen);
+    }
+  }
+  timesince++; // roughly count seconds, to rate limit uploads
+  if (rawlen && timesince > 9) {
+	Serial.print(raw);
+	rawlen = 0;
+	timesince = 0;
+  }
+
   Serial.println("updateDisplay started");
   if (forceReloadScreenConfig) {
     disp.initFromFile();
