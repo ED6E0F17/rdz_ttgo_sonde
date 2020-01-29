@@ -91,14 +91,10 @@ void Scanner::scan()
 	    }
 	}
 	unsigned long duration = millis()-start;
-	Serial.print("Scan time: ");
-	Serial.println(duration);
 	for(int i=0; i<(NCHAN/PIXSAMPL); i++) {
 		// smooth over time
 		scandisp[i]=(scanresult[i] + scandisp[i]) / 2 ;
-                Serial.print(scandisp[i]); Serial.print(", ");
 	}
-	Serial.println("\n");
 }
 
 Scanner scanner = Scanner();

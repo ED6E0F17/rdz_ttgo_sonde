@@ -135,8 +135,6 @@ int RS41::setup(float frequency)
 		RS41_DBG(Serial.println("Setting Packet config FAILED"));
 		return 1;
 	}
-	Serial.print("RS41: setting RX frequency to ");
-	Serial.println(frequency);
 	int retval = sx1278.setFrequency(frequency);
 	dpos = 0;
 
@@ -327,17 +325,8 @@ static void posrs41(const byte b[], uint32_t b_len, uint32_t p)
    y = (double)getint32(b, b_len, p+4UL)*0.01;
    z = (double)getint32(b, b_len, p+8UL)*0.01;
    wgs84r(x, y, z, &lat, &long0, &heig);
-   Serial.print(" ");
    sonde.si()->lat = (float)(X2C_DIVL(lat,1.7453292519943E-2));
-   Serial.print(sonde.si()->lat);
-   Serial.print(" ");
    sonde.si()->lon = (float)(X2C_DIVL(long0,1.7453292519943E-2));
-   Serial.print(sonde.si()->lon);
-   if (heig<1.E+5 && heig>(-1.E+5)) {
-      Serial.print(" ");
-      Serial.print((uint32_t)heig);
-      Serial.print("m");
-   }
    /*speed */
    vx = (double)getint16(b, b_len, p+12UL)*0.01;
    vy = (double)getint16(b, b_len, p+14UL)*0.01;
@@ -355,18 +344,9 @@ static void posrs41(const byte b[], uint32_t b_len, uint32_t p)
    dir = X2C_DIVL(atang2(vn, ve),1.7453292519943E-2);
    if (dir<0.0) dir = 360.0+dir;
    sonde.si()->dir = dir;
-   Serial.print(" ");
    sonde.si()->hs = sqrt((float)(vn*vn+ve*ve))*3.6f;
-   Serial.print(sonde.si()->hs);
-   Serial.print("km/h ");
-   Serial.print(dir);
-   Serial.print("deg ");
-   Serial.print((float)vu);
    sonde.si()->vs = vu;
-   Serial.print("m/s ");
    uint8_t sats = getcard16(b, b_len, p+18UL)&255UL;
-   Serial.print(sats);
-   Serial.println("Sats");
    sonde.si()->sats = sats;
    sonde.si()->alt = heig;
    if( 0==(int)(lat*10000) && 0==(int)(long0*10000) ) {
@@ -412,21 +392,6 @@ int RS41::decode41(byte *data, int maxlen)
 		uint32_t len = data[p++]+2UL;
 		if(p+len>maxlen) break;
 
-#if 0
-		// DEBUG OUTPUT
-		Serial.print("@");
-		Serial.print(p-2);
-		Serial.print(": ID:");
-		Serial.print(typ, HEX);
-		Serial.print(", len=");
-		Serial.print(len);
-		Serial.print(": ");
-		for(int i=0; i<len-1; i++) {
-			char buf[3];
-			snprintf(buf, 4, "%02X|", data[p+i]);
-			Serial.print(buf);
-		}
-#endif
 		// check CRC
 		if(!crcrs(data, 560, p, p+len)) {
 			Serial.println("###CRC ERROR###");
@@ -435,13 +400,9 @@ int RS41::decode41(byte *data, int maxlen)
 		switch(typ) {
 		case 'y': // name
 			{
-			Serial.print("#");
 			uint16_t fnr = data[p]+(data[p+1]<<8);
-			Serial.print(fnr);
 			sonde.si()->frame = fnr;
-			Serial.print("; RS41 ID ");
 			snprintf(buf, 10, "%.8s ", data+p+2);
-			Serial.print(buf);
 			sonde.si()->type=STYPE_RS41;
 			strncpy(sonde.si()->id, (const char *)(data+p+2), 8);
 			sonde.si()->id[8]=0;
@@ -463,7 +424,6 @@ int RS41::decode41(byte *data, int maxlen)
 			if(calnr==0x32) {
 				// countdown is <500m, updated every 50s
 				uint16_t cntdown = data[p+24] + (data[p+25]<<8);
-				Serial.printf("Kill Time: %dm\n", cntdown/60);
 				sonde.si()->countKT = cntdown;
 				sonde.si()->crefKT = fnr;
 			}
@@ -491,7 +451,6 @@ int RS41::decode41(byte *data, int maxlen)
 			break;
 		}}
 		p += len;
-		// Serial.println();
 	}
 	return crcok ? 0 : -1;
 }
@@ -535,8 +494,8 @@ static uint8_t scramble[64] = {150U,131U,62U,81U,177U,73U,8U,152U,50U,5U,89U,
 int RS41::receive() {
 	sx1278.setPayloadLength(RS41MAXLEN-8); 
 	int e = sx1278.receivePacketTimeout(1500, data+8);
-	if(e) { Serial.println("TIMEOUT"); return RX_TIMEOUT; } 
-
+	if(e)
+		return RX_TIMEOUT;
         for(int i=0; i<RS41MAXLEN; i++) { data[i] = reverse(data[i]); }
         for(int i=0; i<RS41MAXLEN; i++) { data[i] = data[i] ^ scramble[i&0x3F]; }
         return decode41(data, RS41MAXLEN);

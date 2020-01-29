@@ -993,7 +993,7 @@ void Display::drawVS(DispEntry *de) {
 	   return;
 	}
 	snprintf(buf, 16, "  %+2.1f", sonde.si()->vs);
-	Serial.printf("drawVS: extra is %s width=%d\n", de->extra?de->extra:"<null>", de->width);
+	// Serial.printf("drawVS: extra is %s width=%d\n", de->extra?de->extra:"<null>", de->width);
 	if(de->extra) { strcat(buf, de->extra); }
 	drawString(de, buf+strlen(buf)-5- (de->extra?strlen(de->extra):0) );
 	if(!de->extra) rdis->drawTile(de->x+5,de->y,2,ms_tiles);
@@ -1030,7 +1030,7 @@ void Display::drawRSSI(DispEntry *de) {
 	if(sonde.config.disptype!=1) {
 		snprintf(buf, 16, "-%d   ", sonde.si()->rssi/2);
 		int len=strlen(buf)-3;
-		Serial.printf("drawRSSI: %d %d %d (%d)[%d]\n", de->y, de->x, sonde.si()->rssi/2, sonde.currentSonde, len);
+		// Serial.printf("drawRSSI: %d %d %d (%d)[%d]\n", de->y, de->x, sonde.si()->rssi/2, sonde.currentSonde, len);
 		buf[5]=0;
 		drawString(de,buf);
 		rdis->drawTile(de->x+len, de->y, 1, (sonde.si()->rssi&1)?halfdb_tile1:empty_tile1);
@@ -1199,8 +1199,8 @@ static int tmpc=0;
 		gpsBear = -1;
 	}
 	
-	Serial.printf("GPS data: valid%d  GPS at %f,%f (alt=%d,cog=%d);  sonde at dist=%d, dir=%d rel.bear=%d\n",gpsValid?1:0,
-		gpsLat, gpsLon, gpsAlt, gpsCourse, gpsDist, gpsDir, gpsBear);
+	//Serial.printf("GPS data: valid%d  GPS at %f,%f (alt=%d,cog=%d);  sonde at dist=%d, dir=%d rel.bear=%d\n",gpsValid?1:0,
+	//	gpsLat, gpsLon, gpsAlt, gpsCourse, gpsDist, gpsDir, gpsBear);
 }
 
 void Display::drawGPS(DispEntry *de) {
