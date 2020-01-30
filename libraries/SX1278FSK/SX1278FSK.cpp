@@ -727,14 +727,14 @@ uint8_t SX1278FSK::receivePacketTimeout(uint32_t wait, byte *data)
 				int rssi=getRSSI();
 				int afc=getAFC();
 #if 0
-				Serial.printf("Test(%d): RSSI=%d", rxtask.currentSonde, rssi/2);
+				Serial.printf("Test(%d): RSSI=-%d", rxtask.currentSonde, rssi/2);
 				Serial.print("Test: AFC="); Serial.println(afc);
 #endif
 				sonde.sondeList[rxtask.currentSonde].rssi = rssi;
 				sonde.sondeList[rxtask.currentSonde].afc = afc;
 				if(rxtask.receiveResult==0xFFFF)
 					rxtask.receiveResult = RX_UPDATERSSI;
-				//sonde.si()->rssi = rssi;
+				sonde.si()->rssi = rssi;
 				//sonde.si()->afc = afc;
 			}
 			if(di>520) {

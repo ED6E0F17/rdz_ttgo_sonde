@@ -1295,7 +1295,7 @@ void setup()
 {
   char buf[12];
   // Open serial communications and wait for port to open:
-  Serial.begin(115200);
+  Serial.begin(57600);
   for (int i = 0; i < 39; i++) {
     int v = gpio_get_level((gpio_num_t)i);
     Serial.printf("%d:%d ", i, v);
@@ -1601,7 +1601,7 @@ void loopDecoder() {
   int action;
   action = (int)(res >> 8);
 
-  int rssi = sx1278.getRSSI();
+  int rssi = -(sonde.si()->rssi) / 2;
   Serial.print("CurrentRSSI=");
   Serial.println(rssi);
 
@@ -1689,6 +1689,11 @@ void loopDecoder() {
 	rawlen = 0;
 	timesince = 0;
   }
+
+  // Ack commands from Serial
+  while (Serial.available())
+    if (Serial.read() == 10) // newline
+      Serial.print("*"); // * == OK
 
   if (forceReloadScreenConfig) {
     disp.initFromFile();
